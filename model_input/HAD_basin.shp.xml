@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+	<idinfo>
+		<descript>
+			<abstract>HydroSHEDS (Hydrological data and maps based on SHuttle Elevation
+Derivatives at multiple Scales) provides hydrographic information in a
+consistent and comprehensive format for regional and global-scale
+applications. HydroSHEDS offers a suite of geo-referenced data sets
+(vector and raster), including stream networks, watershed boundaries,
+drainage directions, and ancillary data layers such as flow
+accumulations, distances, and river topology information. HydroSHEDS is
+derived from elevation data of the Shuttle Radar Topography Mission
+(SRTM) at 3 arc-second resolution. Available HydroSHEDS resolutions
+range from 3 arc-second (approx. 90 meters at the equator) to 5 minute
+(approx. 10 km at the equator) with seamless near-global extent.</abstract>
+			<purpose>The goal of developing HydroSHEDS was to generate key data layers to support regional and global watershed analyses, hydrological modeling, and freshwater conservation planning at a quality, resolution and extent that had previously been unachievable.</purpose>
+			<supplinf/>
+		</descript>
+		<useconst>Users may apply HydroSHEDS for non-commercial purposes. We kindly ask users to cite HydroSHEDS in any published material produced using this data. Any modification of the original data by users must be noted. The authors of HydroSHEDS may request reprints of publications and copies of derived materials. The user shall not reproduce, convert, (re)publish, (re)distribute, (re)broadcast, (re)transmit, sell, rent, lease, sublicense, lend, assign, time-share, or transfer, in whole or in part, or provide unlicensed third parties access to the data and related materials without explicit written permission from the authors. For more details see HydroSHEDS Technical Documentation.</useconst>
+		<datacred>HydroSHEDS has been developed by the Conservation Science Program of World Wildlife Fund (WWF), in partnership with the U.S. Geological Survey (USGS), the International Centre for Tropical Agriculture (CIAT), The Nature Conservancy (TNC), and the Center for Environmental Systems Research (CESR) of the University of Kassel, Germany.</datacred>
+		<citation>
+			<citeinfo>
+				<title>HydroSHEDS (BAS) - Africa drainage basins (watershed boundaries) at 30s resolution</title>
+				<pubdate/>
+				<othercit>&lt;b&gt;Title:&lt;/b&gt; HydroSHEDS (BAS) - Africa drainage basins (watershed boundaries) at 30s resolution&lt;br/&gt;&lt;b&gt;Credits:&lt;/b&gt; World Wildlife Fund (WWF)&lt;br/&gt;&lt;b&gt;Publication Date:&lt;/b&gt; 2006&lt;br/&gt;&lt;b&gt;Publisher:&lt;/b&gt; U.S. Geological Survey&lt;br/&gt;&lt;b&gt;Online Linkages: &lt;/b&gt;&lt;ul&gt;&lt;li&gt;&lt;a target='blank' href='http://hydrosheds.cr.usgs.gov'&gt;http://hydrosheds.cr.usgs.gov&lt;/a&gt;&lt;/li&gt;&lt;li&gt;&lt;a target='blank' href='http://www.worldwildlife.org/hydrosheds'&gt;http://www.worldwildlife.org/hydrosheds&lt;/a&gt;&lt;/li&gt;&lt;/ul&gt;&lt;b&gt;Other Citation Info:&lt;/b&gt; Please cite HydroSHEDS as:
+Lehner, B., Verdin, K., Jarvis, A. (2006): HydroSHEDS Technical Documentation. World Wildlife Fund US, Washington, DC. Available at http://hydrosheds.cr.usgs.gov.&lt;br/&gt;</othercit>
+				<origin>World Wildlife Fund (WWF)</origin>
+				<onlink>http://app.databasin.org/app/pages/datasetPage.jsp?id=878c064ec5d8440493f9924f90b58af1</onlink>
+				<pubinfo>
+					<publish/>
+					<pubplace/>
+				</pubinfo>
+			</citeinfo>
+		</citation>
+		<ptcontac>
+			<cntinfo>
+				<cntperp>
+					<cntper>Customer Services (custserv@usgs.gov)</cntper>
+					<cntorg>EROS Data Center</cntorg>
+				</cntperp>
+			</cntinfo>
+		</ptcontac>
+		<status>
+			<progress/>
+			<update/>
+		</status>
+		<timeperd>
+			<timeinfo>
+				<sngdate/>
+				<current/>
+			</timeinfo>
+		</timeperd>
+		<keywords/>
+		<spdom>
+			<bounding>
+				<northbc>37.56666666666639</northbc>
+				<eastbc>54.541666666666394</eastbc>
+				<southbc>-34.84166666666667</southbc>
+				<westbc>-18.166666666666664</westbc>
+			</bounding>
+		</spdom>
+	</idinfo>
+	<dataqual>
+		<attracc>
+			<attraccr/>
+		</attracc>
+		<complete/>
+		<lineage/>
+	</dataqual>
+	<eainfo>
+		<detailed>
+			<attr>
+				<attrlabl>FID</attrlabl>
+				<attalias>FID</attalias>
+				<attrdef/>
+				<attrdomv/>
+			</attr>
+			<attr>
+				<attrlabl>Shape</attrlabl>
+				<attalias>Shape</attalias>
+				<attrdef/>
+				<attrdomv/>
+			</attr>
+			<attr>
+				<attrlabl>BASIN_ID</attrlabl>
+				<attalias>BASIN_ID</attalias>
+				<attrdef>basin id</attrdef>
+				<attrdomv/>
+			</attr>
+			<attr>
+				<attrlabl>AREA_SQKM</attrlabl>
+				<attalias>AREA_SQKM</attalias>
+				<attrdef>area in km2</attrdef>
+				<attrdomv/>
+			</attr>
+		</detailed>
+	</eainfo>
+	<distinfo>
+		<resdesc>HydroSHEDS (BAS) - Africa drainage basins (watershed boundaries) at 30s resolution</resdesc>
+		<distrib>
+			<cntinfo>
+				<cntorgp>
+					<cntorg>Data Basin (www.databasin.org)</cntorg>
+				</cntorgp>
+				<cntemail>databasin@consbio.org</cntemail>
+				<cntorgp/>
+			</cntinfo>
+			<cntinfo/>
+			<cntinfo/>
+		</distrib>
+		<stdorder>
+			<digform>
+				<digtopt>
+					<onlinopt>
+						<computer>
+							<networka>
+								<networkr>http://app.databasin.org/app/pages/datasetPage.jsp?id=878c064ec5d8440493f9924f90b58af1</networkr>
+							</networka>
+						</computer>
+					</onlinopt>
+				</digtopt>
+			</digform>
+		</stdorder>
+	</distinfo>
+	<Esri><CreaDate>20220504</CreaDate><CreaTime>12023200</CreaTime><ArcGISFormat>1.0</ArcGISFormat><SyncOnce>TRUE</SyncOnce><DataProperties><itemProps><itemLocation><linkage Sync="TRUE">file://\\IP-0A5317A4\C\arcgisserver\services\im2\878c064ec5d8440493f9924f90b58af1\878c064ec5d8440493f9924f90b58af1\commondata\data0\af_bas_30s_beta</linkage><protocol Sync="TRUE">Local Area Network</protocol></itemLocation></itemProps><copyHistory><copy source="C:\arcgisserver\services\im2\878c064ec5d8440493f9924f90b58af1\commondata\data0\af_bas_30s_beta" dest="\\IP-0A5317A4\C\arcgisserver\services\im2\878c064ec5d8440493f9924f90b58af1\878c064ec5d8440493f9924f90b58af1\commondata\data0\af_bas_30s_beta" date="20110513" time="04100800"></copy></copyHistory><lineage><Process ToolSource="c:\program files (x86)\arcgis\desktop10.8\ArcToolbox\Toolboxes\Data Management Tools.tbx\Project" Date="20220504" Time="120234">Project HAD_basin_utm_provitional "C:\Users\Edisson\OneDrive - Cardiff University\HAD\GIS\shp\HAD_basin.shp" GEOGCS['GCS_WGS_1984',DATUM['D_WGS_1984',SPHEROID['WGS_1984',6378137.0,298.257223563]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]] # PROJCS['WGS_1984_Web_Mercator_Auxiliary_Sphere',GEOGCS['GCS_WGS_1984',DATUM['D_WGS_1984',SPHEROID['WGS_1984',6378137.0,298.257223563]],PRIMEM['Greenwich',0.0],UNIT['Degree',0.0174532925199433]],PROJECTION['Mercator_Auxiliary_Sphere'],PARAMETER['False_Easting',0.0],PARAMETER['False_Northing',0.0],PARAMETER['Central_Meridian',0.0],PARAMETER['Standard_Parallel_1',0.0],PARAMETER['Auxiliary_Sphere_Type',0.0],UNIT['Meter',1.0]] NO_PRESERVE_SHAPE # NO_VERTICAL</Process></lineage></DataProperties></Esri></metadata>
