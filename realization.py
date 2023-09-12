@@ -1,9 +1,12 @@
+# https://stackoverflow.com/a/248066/5885810
+from os.path import abspath, dirname, join
+parent_d = dirname(__file__)    # otherwise, will append the path.of.the.tests
+# parent_d = './'               # to be used in IPython
+
 import numpy as np
 import xarray as xr
 import rioxarray as rio
 import geopandas as gpd
-import pyproj as pp
-from osgeo import gdal
 from rasterio.enums import Resampling # IF you're doing BILINEAR or NEAREST too?
 from rasterio.features import shapes
 from pandas import RangeIndex
@@ -13,172 +16,47 @@ from skimage import morphology#, color
 # # import matplotlib.pyplot as plt
 
 
-#%% SOME.DEFAULTS (for testing outside STORM3?)
-
-
-# ## RAINFALL_MAP stored in some NC.like.these...
-# ## --------------------------------------------
-# RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# RAIN_MAP = './realisation_MAM_crs-wrong.nc'                         # no..interpretable CRS
-# RAIN_MAP = './model_output/SOME_test.nc'                            # HAD.projected CRS
-# RAIN_MAP = './model_output/SOME_test-for.nc'                        # HAD.projected CRS
-
-# RAIN_MAP = './realisation_MAM_crs-OK.nc'                            # yes.interpretable CRS
-# SUBGROUP = ''
-# CLUSTERS = 4
-
-
 #%% DEFINING FUNCTIONS
-
-
-#~ COORDINATE SYSTEMS & GLOBAL.VARS TO USE ONLY IN THIS SCRIPT ~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def CRSS():
-    global WKT_OGC, WGS84_WKT
-    # HAD projection
-    WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
-        'GEOGCS["unknown",'\
-            'DATUM["unknown",'\
-                'SPHEROID["Normal Sphere (r=6370997)",6370997,0]],'\
-            'PRIMEM["Greenwich",0,'\
-                'AUTHORITY["EPSG","8901"]],'\
-            'UNIT["degree",0.0174532925199433,'\
-                'AUTHORITY["EPSG","9122"]]],'\
-        'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
-        'PARAMETER["latitude_of_center",5],'\
-        'PARAMETER["longitude_of_center",20],'\
-        'PARAMETER["false_easting",0],'\
-        'PARAMETER["false_northing",0],'\
-        'UNIT["metre",1,'\
-            'AUTHORITY["EPSG","9001"]],'\
-        'AXIS["Easting",EAST],'\
-        'AXIS["Northing",NORTH],'\
-        'AUTHORITY["EPSG","42106"]]'
-    # WGS84 projection
-    WGS84_WKT = 'GEOGCS["WGS 84",'\
-        'DATUM["WGS_1984",'\
-            'SPHEROID["WGS 84",6378137,298.257223563,'\
-                'AUTHORITY["EPSG","7030"]],'\
-            'AUTHORITY["EPSG","6326"]],'\
-        'PRIMEM["Greenwich",0,'\
-            'AUTHORITY["EPSG","8901"]],'\
-        'UNIT["degree",0.0174532925199433,'\
-            'AUTHORITY["EPSG","9122"]],'\
-        'AUTHORITY["EPSG","4326"]]'
-
-
-#~ BUFFER & CATCHMENT MASKS INTO NUMPY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def NUMPY_MASKS( SHP_FILE, BUFFER ):# SHP_FILE='./model_input/HAD_basin.shp' ; BUFFER=8000.
-    global XS, YS
-# some already defaults
-    X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-    Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# read WG-catchment shapefile (assumed to be in WGS84)
-    wtrwgs = gpd.read_file( SHP_FILE )
-# transform it into EPSG:42106 & make the buffer    # this code does NOT work!
-# https://gis.stackexchange.com/a/328276/127894     (geo series into gpd)
-    # wtrshd = wtrwgs.to_crs( epsg=EPSG_CODE )
-    # wtrshd = wtrwgs.to_crs( crs =PROJ4_STR )
-    wtrshd = wtrwgs.to_crs( crs =WKT_OGC )          # //epsg.io/42106.wkt
-    BUFFRX = gpd.GeoDataFrame(geometry=wtrshd.buffer( BUFFER ))#.to_crs(epsg=4326)
-# infering (and rounding) the limits of the buffer-zone
-    llim = np.floor( BUFFRX.bounds.minx[0] /X_RES ) *X_RES #+X_RES/2
-    rlim = np.ceil(  BUFFRX.bounds.maxx[0] /X_RES ) *X_RES #-X_RES/2
-    blim = np.floor( BUFFRX.bounds.miny[0] /Y_RES ) *Y_RES #+Y_RES/2
-    tlim = np.ceil(  BUFFRX.bounds.maxy[0] /Y_RES ) *Y_RES #-Y_RES/2
-
-#~IN.CASE.YOU.WANNA.XPORT.(OR.USE).THE.MASK+BUFFER.as.geoTIFF~~~~~~~~~~~~~~~~~~#
-    # # ACTIVATE if IN.TIFF
-    # tmp_file = 'tmp-raster_mask-buff.tif'
-    # tmp = gdal.Rasterize(tmp_file, BUFFRX.to_json(), xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True, format='GTiff'
-    # ACTIVATE if IN.MEMORY
-    tmp = gdal.Rasterize('', BUFFRX.to_json(), xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True, format='MEM'
-        , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
-        , targetAlignedPixels=True
-        # , targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-#!!
-# UPDATE HERE -> outputSRS [in WKT instead of PROJ4]
-#!!
-    # OR! USE THE PROPER WKT!
-        #  outputSRS=f'EPSG:{EPSG_CODE}'#f'{PROJ4_STR}'
-        , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
-        # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
-        )
-    BUFFRX_MASK = tmp.ReadAsArray().astype('u1')
-    tmp = None
-
-#~BURN THE CATCHMENT SHP INTO RASTER (WITHOUT BUFFER EXTENSION)~~~~~~~~~~~~~~~~#
-# https://stackoverflow.com/a/47551616/5885810  (idx polygons intersect)
-# https://gdal.org/programs/gdal_rasterize.html
-# https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
-# https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
-# https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
-    tmp = gdal.Rasterize(''
-        # , gagnet.to_json() if MODE.lower() == 'validation' else wtrshd.to_json()
-        # , add=(1 if MODE.lower() == 'validation' else 0)
-        , wtrshd.to_json()
-        , add=0
-        , xRes=X_RES, yRes=Y_RES, allTouched=True, noData=0, burnValues=1, format='MEM'
-        , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
-        , targetAlignedPixels=True
-        # ,targetAlignedPixels=False, # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-        # , outputSRS=f'EPSG:{EPSG_CODE}'#f'{PROJ4_STR}'
-#!!
-# UPDATE HERE -> outputSRS [in WKT instead of PROJ4]
-#!!
-    # OR! USE THE PROPER WKT!
-        , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
-        # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
-        )
-    CATCHMENT_MASK = tmp.ReadAsArray().astype('u1')
-    tmp = None           # flushing!
-
-# DEFINE THE COORDINATES OF THE XY.AXES
-    XS, YS = list(map( lambda a,b,c: np.arange(a +c/2, b +c/2, c),
-                      [llim,blim], [rlim,tlim], [X_RES,Y_RES] ))
-# flip YS??
-    YS = np.flipud( YS )      # -> important...so rasters are compatible with numpys
-
-    return BUFFRX_MASK, CATCHMENT_MASK
-
 
 #~ GENERATES VOID RIO.XARRAY IN THE LOCAL SYSTEM ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def EMPTY_MAP( yyss, xxss, WKT_OGC ):# yyss=YS ; xxss=XS
-    # # coordinates from HAD.grid
-    # yyss = np.linspace(1167500., -1177500., 470, endpoint=True)
-    # xxss = np.linspace(1342500.,  3377500., 408, endpoint=True)
+# # coordinates from HAD.grid
+#     yyss = np.linspace(1167500., -1177500., 470, endpoint=True)
+#     xxss = np.linspace(1342500.,  3377500., 408, endpoint=True)
     # void numpy
     void = np.empty( (len(yyss),len(xxss)) )
     void.fill(np.nan)
-    # create xarray
-    xr_void = xr.DataArray(data=void, dims=['y', 'x'],
-        # coords=dict(y=(['y'], YS), x=(['x'], XS), ),
-        coords=dict(y=(['y'], yyss), x=(['x'], xxss), ),
-        attrs=dict(_FillValue=np.nan, units='mm', ),
+# create xarray
+    xr_void = xr.DataArray(data=void, dims=['y', 'x']#, name='void'
+        # , coords=dict(y=(['y'], YS), x=(['x'], XS), )
+        , coords=dict(y=(['y'], yyss), x=(['x'], xxss), )
+        , attrs=dict(_FillValue=np.nan, units='mm', ),
         )
-    # xr_void = xr.DataArray(data=void, name='rain', dims=['time','lat', 'lon'],
-    #     coords=dict(time=(['time'],np.r_[1000,2000,3000,4000,5000]),
-    #     lat=(['lat'], np.r_[1,2,3,4,5,6,7]), lon=(['lon'], np.r_[1,2,3]), ),
-    #     attrs=dict(_FillValue=np.nan, units='mm', ))
-    # assign CRS
-    xr_void.rio.write_crs(rio.crs.CRS( WKT_OGC ),
-                          grid_mapping_name='spatial_ref', inplace=True)
-    # xr_void.to_netcdf('00.nc')
+    # xr_void = xr.DataArray(data=void, name='rain', dims=['time','lat', 'lon']
+    #     , coords=dict(time=(['time'],np.r_[1000,2000,3000,4000,5000])
+    #     , lat=(['lat'], np.r_[1,2,3,4,5,6,7]), lon=(['lon'], np.r_[1,2,3]), )
+    #     , attrs=dict(_FillValue=np.nan, units='mm', ))
+# assign CRS
+    xr_void.rio.write_crs(rio.crs.CRS( WKT_OGC ), grid_mapping_name='spatial_ref', inplace=True)
+    # # IF xported
+    # xr_void.to_netcdf('./void.nc', mode='w'
+    #     # , encoding={'void':{'dtype':'f8', 'zlib':True, 'complevel':9, 'grid_mapping':'spatial_ref'},})
+    #     , encoding={'__xarray_dataarray_variable__':{'dtype':'f8', 'zlib':True, 'complevel':9, 'grid_mapping':'spatial_ref'},})
     return xr_void
 
 
 #~ READING & REPROJECTING a REALIZATION RAINFALL.FIELD ~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def READ_REALIZATION( RAIN_MAP, SUBGROUP, YS, XS, WKT_OGC ):
+def READ_REALIZATION( RAIN_MAP, SUBGROUP, WKT_OGC, YS, XS ):
+# YS=SHP_REGION.__globals__['YS'] ; XS=SHP_REGION.__globals__['XS']
     global xoid
 # create empty xarray
     xoid = EMPTY_MAP( YS, XS, WKT_OGC )
 
-    xile = rio.open_rasterio( RAIN_MAP, group=SUBGROUP )
-    # xile = rio.open_rasterio( RAIN_MAP, group='Grid')[0]
-    # xile = rio.open_rasterio( RAIN_MAP, group='somethn_01')#[0]
+    xile = rio.open_rasterio( abspath( join(parent_d, RAIN_MAP) ), group=SUBGROUP )
+    # xile = rio.open_rasterio( abspath( join(parent_d, RAIN_MAP) ), group='Grid')[0]
+    # xile = rio.open_rasterio( abspath( join(parent_d, RAIN_MAP) ), group='somethn_01')#[0]
 
 # REMOVING the annoying BAND dimension (assuming we only have ONE band!)
     if 'band' in list(xile.dims):
@@ -210,7 +88,7 @@ def READ_REALIZATION( RAIN_MAP, SUBGROUP, YS, XS, WKT_OGC ):
 
     # here we assume the CRS.exist & can be retrieved
     # ...we also assume that it's in "crs_wkt" but it can also be in "spatial_ref"
-        alter = xr.open_dataset( RAIN_MAP )#, decode_coords='all')
+        alter = xr.open_dataset( abspath( join(parent_d, RAIN_MAP) ) )#, decode_coords='all')
         alter_wkt = rio.crs.CRS( alter[ xvar ].attrs['crs_wkt'] )
         # alter_wkt = rio.crs.CRS( alter[ xvar ].attrs['spatial_ref'] )
         alter.rio.write_crs(alter_wkt, grid_mapping_name='spatial_ref', inplace=True)
@@ -251,15 +129,21 @@ FAILS with GOOD CRS
     # reprojection happens here
         pile = xile.rio.reproject_match(xoid, resampling=Resampling.nearest )
 
-    # # some.VISUALISATION (assuming RAIN is the variable!!)
-    # # ----------------------------------------------------
-    # import cmaps
-    # # from cmcrameri import cm as cmc
-    # cmaps.precip2_17lev
-    # # cmaps.wh_bl_gr_ye_re
-    # # cmaps.WhiteBlueGreenYellowRed
-    # xile.rain.plot(cmap='precip2_17lev', levels=10,vmin=100,vmax=1000, add_colorbar=True)#, robust=True)#, ax=ax)
-    # pile.rain.plot(cmap='precip2_17lev', levels=10,vmin=100,vmax=1000, add_colorbar=True)#, robust=True)#, ax=ax)
+        # # some.VISUALISATION (assuming RAIN is the variable!!)
+        # # ----------------------------------------------------
+        # import cmaps
+        # # from cmcrameri import cm as cmc
+        # cmaps.precip2_17lev
+        # # cmaps.wh_bl_gr_ye_re
+        # # cmaps.WhiteBlueGreenYellowRed
+        # xile.rain.plot(cmap='precip2_17lev', levels=10,vmin=100,vmax=1000, add_colorbar=True)#, robust=True)#, ax=ax)
+        # pile.rain.plot(cmap='precip2_17lev', levels=10,vmin=100,vmax=1000, add_colorbar=True)#, robust=True)#, ax=ax)
+        # # XPORT.IT.as.NUMPY ----------------------------------
+        # np.save('./realisation', pile.rain.data, allow_pickle=True, fix_imports=True)
+        # # XPORT.IT.as.PICKLE [but don't use it for NUMPYs!] --
+        # # https://stackoverflow.com/a/62883390/5885810
+        # import pickle
+        # with open('./realisation.pkl','wb') as f: pickle.dump(pile.rain.data, f)
 
         xile = pile
         xvar = xile.rio.grid_mapping
@@ -267,50 +151,16 @@ FAILS with GOOD CRS
         xcrs = xile.rio.crs
 
     return xile
-    # class RAINFIELD:
-    #     rain = xile
-    #     void = xoid
-
-    # return RAINFIELD
 
     # pile.to_netcdf('realisation_had.nc', mode='w', engine='netcdf4',
     #     encoding={'rain':{'dtype':'f4','zlib':True,'complevel':9, 'grid_mapping':pile.rio.grid_mapping},
     #               'mask':{'dtype':'u1', 'grid_mapping':pile.rio.grid_mapping}, })#,'_FillValue':0
-
-    # # puta = rio.open_rasterio( './realisation_had.nc' )
-    # # puta.rio.grid_mapping
-    # # puta.rio.crs
-    # # puta.rio.transform()
-    # # puta.close()
 
 
 #~ IMAGE SEGMENTATION via SCIKIT-LEARN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # following: https://github.com/ageron/handson-ml2/blob/master/09_unsupervised_learning.ipynb
 
-# def KREGIONS( REG, N_C=4 ):# REG=np.flip(real.rain[0,:].data, axis=0) # REG=meal
-# # REG: 2D.numpy representing the rainfall.field [realization]
-# # N_C: number of clusters
-#     # transform the (RGB?) field into 1D.numpy
-#     X = REG.reshape(-1, 1)
-#     # kmeans = KMeans(n_clusters=3, init=np.array([[70],[220],[800]]), n_init='auto').fit( X )
-#     kmeans = KMeans(n_clusters=N_C, n_init=11).fit( X )
-
-# # # we're interested in the classes.. not in the actual means
-# #     segmented_img = kmeans.cluster_centers_[ kmeans.labels_ ]
-# #     # bsctransform to 2D.numpy
-# #     segmented_img = segmented_img.reshape( REG.shape )
-
-#     LAB = kmeans.labels_.reshape( REG.shape )
-#     # plt.imshow(LAB, origin='lower', cmap='turbo', interpolation='none')#.resampled(3))
-#     # # plt.savefig('realization.pdf', bbox_inches='tight',pad_inches=0.02)
-#     # # plt.close() ; plt.clf()
-
-# # https://stackoverflow.com/a/25715954/5885810  # np.object to np.string
-# # https://www.w3resource.com/numpy/string-operations/strip.php  # strip np.string.arrays
-#     KAT = np.char.strip(kmeans.get_feature_names_out().astype('U'), 'kmeans')
-
-#     return LAB, dict(zip(KAT, kmeans.cluster_centers_))#, np.unique(kmeans.labels_)
 def KREGIONS( REG, N_C=4 ):
 # REG=real.rain.data#np.flip(real.rain[0,:].data, axis=0)
 # REG=np.ma.MaskedArray( real.rain.data, ~CATCHMENT_MASK.astype('bool') )
@@ -326,7 +176,7 @@ def KREGIONS( REG, N_C=4 ):
     # transform the non-void (RGB?) field into 1D.numpy
     X = ravl[ idrs ].data.reshape(-1, 1)
     # kmeans = KMeans(n_clusters=3, init=np.array([[70],[220],[800]]), n_init='auto').fit( X )
-    kmeans = KMeans(n_clusters=N_C, n_init=11).fit( X )
+    kmeans = KMeans(n_clusters=N_C, n_init=11, random_state=None).fit( X )
 
 # # we're interested in the classes.. not in the actual means
 #     segmented_img = kmeans.cluster_centers_[ kmeans.labels_ ]
@@ -432,10 +282,7 @@ def MORPHOPEN( LAB ):
     # #-------------------------------------------------------------------------
 
 
-#%% CALL & COMPUTE...
-
-
-# #-READING NUMPYS& PICKLES-#-------------------
+# #-READING NUMPYS& PICKLES-#---------------------------------------------------
 # #-----------------------------------------------------------------------------
 # # reading the xported.numpy
 # real = np.load('realisation_MAM.npy')
@@ -455,7 +302,8 @@ def MORPHOPEN( LAB ):
 # #-----------------------------------------------------------------------------
 
 
-def REGIONALISATION( real, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK ):#, xoid ):
+def REGIONALISATION( real, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK ):
+# CATCHMENT_MASK=SHP_REGION.__globals__['CATCHMENT_MASK']
 
 #-WORK UNDER PROGRESS... TO MAKE COMPATIBLE MORE OPTIONS!!----------------------
     # npreg, cdic = KREGIONS( real.rain[0,:].data, CLUSTERS )
@@ -469,11 +317,14 @@ def REGIONALISATION( real, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK ):#, xoid ):
     # ... in the line below (previous cases) BAND was removed!
     # mask_regn = np.ma.MaskedArray( real.rain['band'==1,:].data.copy(), ~CATCHMENT_MASK.astype('bool') )
 
-    npreg, cdic = KREGIONS( mask_regn, CLUSTERS )
+    npreg, cdic = KREGIONS( mask_regn, N_C=CLUSTERS )
 
 # # reduce the vertices of a shape -> MORPHOLOGY
 #     mopen = MORPHOPEN( npreg )
 # ... or NOT!! :D
+    """
+[2023.09.04]: MORPHOPEN does NOT deal (for now) with NAs; thus pass 'npreg' to 'mopen'
+    """
     mopen = npreg
 
 # NUMPY to SHAPE
@@ -609,73 +460,67 @@ def REGIONALISATION( real, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK ):#, xoid ):
 #%%
 
 if __name__ == '__main__':
-    ## RAINFALL_MAP stored in some NC.like.these...
-    ## --------------------------------------------
-    RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-    RAIN_MAP = './realisation_MAM_crs-wrong.nc'                         # no..interpretable CRS
-    RAIN_MAP = './model_output/SOME_test.nc'                            # HAD.projected CRS
-    RAIN_MAP = './model_output/SOME_test-for.nc'                        # HAD.projected CRS
 
-    RAIN_MAP = './realisation_MAM_crs-OK.nc'                            # yes.interpretable CRS
-    SUBGROUP = ''
-    CLUSTERS = 4
+    # X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+    # Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+    # BUFFER    =  8000.                      # in meters! -> buffer distance (out of the HAD)
+    # SHP_FILE = './model_input/HAD_basin.shp'                            # catchment shape-file in WGS84
 
-    CRSS()
-    # BUFFER in meters! -> buffer distance (out of the HAD)
-    BUFFRX_MASK, CATCHMENT_MASK = NUMPY_MASKS( './model_input/HAD_basin.shp', 8000. )
-    # read the REALIZATION
-    real = READ_REALIZATION( RAIN_MAP, SUBGROUP, YS, XS, WKT_OGC )
-    regs = REGIONALISATION( real, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK )
-    # regs = REGIONALISATION( real.rain, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK, real.void )
+    # ## RAINFALL_MAP stored in some NC.like.these...
+    # ## --------------------------------------------
+    # RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
+    # RAIN_MAP = './realisation_MAM_crs-wrong.nc'                         # no..interpretable CRS
+    # RAIN_MAP = './model_output/SOME_test.nc'                            # HAD.projected CRS
+    # RAIN_MAP = './model_output/SOME_test-for.nc'                        # HAD.projected CRS
+
+    # RAIN_MAP = './realisation_MAM_crs-OK.nc'                            # yes.interpretable CRS
+    # SUBGROUP = ''
+    # CLUSTERS = 4
+
+    from parameters import CLUSTERS
+    from rainfall import SHP_REGION
+
+    SHP_REGION()
+    real = READ_REALIZATION( SHP_REGION.__globals__['RAIN_MAP'],
+        SHP_REGION.__globals__['SUBGROUP'], SHP_REGION.__globals__['WKT_OGC'],
+        SHP_REGION.__globals__['YS'], SHP_REGION.__globals__['XS'] )
+    # regs = REGIONALISATION( real.rain, CLUSTERS,
+    regs = REGIONALISATION( real, CLUSTERS,
+        SHP_REGION.__globals__['BUFFRX_MASK'], SHP_REGION.__globals__['CATCHMENT_MASK'] )
 
 
 #%% IMPROVE READING with RASTERIO??
 
-#     ncrx = xr.open_dataset('realisation_MAM.nc', engine='rasterio', decode_coords="all",
-#                             decode_times=True, decode_cf=True)#, use_cftime=True)
+#     ncrx = xr.open_dataset('realisation_MAM.nc', engine='rasterio', decode_coords="all", decode_times=True, decode_cf=True, use_cftime=True)
+#     ncrx = rio.open_rasterio('realisation_MAM.nc')
+#     ncrx.rio.crs
+#     ncrx.rio.transform()
+#     ncrx.rio.grid_mapping
+#     ncrx.close()
 
-#     cuca = xr.open_dataset('realisation_MAM.nc', engine="rasterio")
-#                             decode_times=True, decode_cf=True, use_cftime=True)
-
-#     ncxr = xr.open_dataset('realisation_MAM.nc', decode_coords='all')
-
-
-#     ncrio = rio.open_rasterio('realisation_MAM.nc')
-
-#     perra = rio.open_rasterio('realisation_MAMz.nc')
-#     perra.rio.crs
-#     perra.rio.transform()
-#     perra.rio.grid_mapping
-#     perra.close()
-
-#     puta = rio.open_rasterio('../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5')
-#     puta = xr.open_dataset('../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5', group='Grid', decode_coords='all')
-
+#     nada = rio.open_rasterio('../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5')
+#     nada = xr.open_dataset('../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5', group='Grid', decode_coords='all')
 # """
 # C:\Users\manuel\miniconda3\envs\py39\lib\site-packages\rasterio\__init__.py:304: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.
 #   dataset = DatasetReader(path, driver=driver, sharing=sharing, **kwargs)
 # C:\Users\manuel\miniconda3\envs\py39\lib\site-packages\rioxarray\_io.py:1132: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.
 # """
 
-#     culo = rio.open_rasterio('./model_output/SOME_test.nc', group='somethn_01', decode_coords='all')
-#     culo.rio.crs
-#     culo.rio.set_crs(rasterio.crs.CRS.from_wkt(culo.crs.attrs['crs_wkt']), inplace=True)
-#     culo.rio.crs
-
-#     teta = culo.rio.crs
-#     teta.is_geographic
-#     teta.is_projected
+#     nada = rio.open_rasterio('./model_output/SOME_test.nc', group='somethn_01', decode_coords='all')
+#     nada.rio.crs
+#     nada.is_geographic
+#     nada.is_projected
+#     nada.rio.set_crs(rasterio.crs.CRS.from_wkt(nada.crs.attrs['crs_wkt']), inplace=True)
+#     nada.rio.crs
 
 
-# #%% TOY NETCDF4
+#%% TOY NETCDF4
 
 # import netCDF4 as nc4
 # import numpy as np
 
-
 # void = np.round(np.random.rand(4,6,3) *10, 1)
-
-# sub_grp = nc4.Dataset('sax2.nc', 'w', format='NETCDF4')
+# sub_grp = nc4.Dataset('void.nc', 'w', format='NETCDF4')
 
 # sub_grp.createDimension('y', 6)
 # sub_grp.createDimension('x', 3)
@@ -685,29 +530,22 @@ if __name__ == '__main__':
 
 # # timexx = sub_grp.createVariable('time', 'u8', ('z'), fill_value=0)#, chunksizes=chunkt)
 # timexx = sub_grp.createVariable('time', vlen_t, ('z'))#, fill_value=0)
-
 # yy = sub_grp.createVariable('lat', 'i4', dimensions=('y'))
 # xx = sub_grp.createVariable('lon', 'i4', dimensions=('x'))
 
 # # timexx[:]= np.r_[1000,2000,3000,4000].astype('u8')
-# timexx[:]= np.array([np.array(1000,dtype='u8'),np.array(2000,dtype='u8'),
-#                       np.array(3000,dtype='u8'),np.array(4000,dtype='u8')],dtype='object')
-
+# timexx[:]= np.array([np.array(1000,dtype='u8'),np.array(2000,dtype='u8'), np.array(3000,dtype='u8'),np.array(4000,dtype='u8')],dtype='object')
 # yy[:] = np.r_[1,2,3,4,5,6]
 # xx[:] = np.r_[1,2,3]
 
-# ncvarx = sub_grp.createVariable('rain', datatype='f8'
-#     ,dimensions=('z','y','x'), zlib=True, complevel=9, fill_value=np.nan)#,least_significant_digit=3)
+# ncvarx = sub_grp.createVariable('rain', datatype='f8', dimensions=('z','y','x'), zlib=True, complevel=9, fill_value=np.nan)#,least_significant_digit=3)
 # ncvarx[:] = void
 
-# # ass = np.empty( (4) )
-# # ass[0:3] = np.r_[1000,2000,3000]
-# # timexx[:] = ass.astype('u8')
+# # cero = np.empty( (4) )
+# # cero[0:3] = np.r_[1000,2000,3000]
+# # timexx[:] = cero.astype('u8')
 # # # timexx[:]= np.r_[1000,2000,3000].astype('u8')
 
 # ncvarx[-1,:,:] = np.nan
-
-# timexx[:]= np.array([np.array(1000,dtype='u8'),np.array(2000,dtype='u8'),
-#                       np.array(3000,dtype='u8') ],dtype='object')
-
+# timexx[:]= np.array([np.array(1000,dtype='u8'),np.array(2000,dtype='u8'), np.array(3000,dtype='u8') ],dtype='object')
 # sub_grp.close()

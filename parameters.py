@@ -12,12 +12,9 @@ For an 'in-prompt' help (on these parameters) type:
     "%%python storm.py -h"  (from your Python console)
 """
 
-# MODE = 'SImuLAtiON'     # Type of Run (case-insensitive). Either 'SIMULATION' or 'VALIDATION'
-# # MODE = 'valiDaTION'     # Type of Run (case-insensitive). Either 'SIMULATION' or 'VALIDATION'
-# MODE = 'somethn'        # Type of Run (case-insensitive). Either 'SIMULATION' or 'VALIDATION'
-SEASONS = 1             # Number of Seasons (per Run)
-NUMSIMS = 1#2             # Number of runs per Season
-NUMSIMYRS = 1#2#3           # Number of years per run (per Season)
+SEASONS = 1#1             # Number of Seasons (per Run)
+NUMSIMS = 2#1#2         # Number of runs per Season
+NUMSIMYRS = 1#2         # Number of years per run (per Season)
 """
 *** perhaps, either NUMSIMS or NUMSIMYRS or both has/have to be re-thought?,
     because i can't really have multiple SIMULATED-YEARS each one containing
@@ -64,13 +61,13 @@ be passed from the command line. Therefore, their modification/tweaking must
 carried out here.
 """
 
-# PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG.csv'      # output from 'pre_processing.py'
-# # PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG-pmf.csv'  # output from 'pre_processing.py'
-SHP_FILE = './model_input/HAD_basin.shp'                            # catchment shape-file in WGS84
-# DEM_FILE = './model_input/dem/WGdem_wgs84.tif'                      # aoi raster-file (optional**)
-# # DEM_FILE = './model_input/dem/WGdem_26912.tif'                    # aoi raster-file in local CRS (***)
+PRE_FILE = './model_input/ProbabilityDensityFunctions_TWO.csv'
+# PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE-pmf.csv'
+SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file in WGS84
+# DEM_FILE = './model_input/dem/WGdem_wgs84.tif'        # aoi raster-file (optional**)
+# DEM_FILE = './model_input/dem/WGdem_26912.tif'        # aoi raster-file in local CRS (***)
 DEM_FILE = None
-OUT_PATH = './model_output'                                         # output folder
+OUT_PATH = './model_output'                             # output folder
 """
 **  DEM_FILE is only required for runs at different altitudes, i.e., Z_CUTS != None
 *** Having the DEM_FILE in the local CRS could contribute to a faster run,
@@ -80,20 +77,18 @@ OUT_PATH = './model_output'                                         # output fol
 """
 
 # RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# RAIN_MAP = './realisation_MAM_crs-wrong.nc'                         # no..interpretable CRS
-RAIN_MAP = './realisation_MAM_crs-OK.nc'                            # yes.interpretable CRS
+# RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
+RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
 SUBGROUP = ''
-CLUSTERS = 4                                                        # number of regions to split the whole.region into
-CLUSTERS = 1
+CLUSTERS = 1#4                                          # number of regions to split the whole.region into
 """
-*** CLUSTERS==1 -> means no splitting at all!.
-    The model still 'splits' the region into 1 big area equal to the catchment.
+CLUSTERS ==1 means no splitting at all!.
+The model still 'splits' the region into 1 big area equal to the catchment.
 """
 
-Z_CUTS = None           # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-# Z_CUTS = [1350, 1500]   # in meters!
-Z_STAT = 'mean'         # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
-# Z_STAT = 'median'       # statistic to retrieve from the DEM ['mean' or 'min'|'max'?? not 'count']
+Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
+# Z_CUTS = [1350, 1500]       # in meters!
+Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
 """
 Z_CUTS = [1350, 1500] are from the analysis carried out in the 'pre_processing.py' module.
 They imply 3 altitude-bands, namely, [0, 1350), [1350, 1500), [1500, 9999), for which the
@@ -103,12 +98,12 @@ bands, will still yield results!; nevertheless, such results won't be representa
 of the parametric functions/statistics found in '.../ProbabilityDensityFunctions.csv'.
 """
 
-# # EPSG:42106 is not implemented in PyProj (or anywhere else) :'(
+# # EPSG:42106 is not implemented in PyProj (or anywhere else) xP
 # EPSG_CODE = 42106       # EPSG Code of the local/regular Coordinate Reference System (https://epsg.io/42106)
-PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
-# PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +type=crs'
+# PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
 # PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
 
+# OGC-WKT for HAD [taken from https://epsg.io/42106]
 WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
     'GEOGCS["unknown",'\
         'DATUM["unknown",'\
@@ -127,6 +122,7 @@ WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
     'AXIS["Easting",EAST],'\
     'AXIS["Northing",NORTH],'\
     'AUTHORITY["EPSG","42106"]]'
+# # ESRI-WKT for HAD [alternative?]
 # WKT_OGC = 'PROJCS["WGS84 / Lambert Azim Mozambique",'\
 #     'GEOGCS["WGS 84",'\
 #         'DATUM["WGS_1984",'\
@@ -137,10 +133,22 @@ WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
 #     'PARAMETER["latitude_of_origin",5],'\
 #     'PARAMETER["central_meridian",20],'\
 #     'UNIT["Meter",1]]'
+# # ---------------------------------------------------
+# # OGC-WKT for WGS84 [taken from https://epsg.io/4326]
+# WGS84_WKT = 'GEOGCS["WGS 84",'\
+#     'DATUM["WGS_1984",'\
+#         'SPHEROID["WGS 84",6378137,298.257223563,'\
+#             'AUTHORITY["EPSG","7030"]],'\
+#         'AUTHORITY["EPSG","6326"]],'\
+#     'PRIMEM["Greenwich",0,'\
+#         'AUTHORITY["EPSG","8901"]],'\
+#     'UNIT["degree",0.0174532925199433,'\
+#         'AUTHORITY["EPSG","9122"]],'\
+#     'AUTHORITY["EPSG","4326"]]'
 
 # #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 """
-USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION() -> [GRID.based 1ST]"
+USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION_GRID() -> [GRID.based 1ST]"
 """
 # # DRYP actual/current grid
 # XLLCORNER =  1319567.308750340249                       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
@@ -205,6 +213,8 @@ Once the spatial domain of the storm is populated by 'rings-of-rainfall', STORM 
 the voids in between by linear interpolation.
 """
 
+### TEMPORAL characterization
+T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
 NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
 MIN_DUR =  2                            # in minutes!
 MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
@@ -215,8 +225,6 @@ MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
 MAX_DUR and MIN_DUR constraints the storm-duration of the sampled pairs
 from the intenstity-duration copula.
 """
-
-T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
 # designed MAXIMUM rainfall for T_RES!! (Twice of that of IMERG!) [note also that 120 << 131.068_iMAX]
 MAXD_RAIN = 60 *2                       # in mm
 DISPERSE_ = .2                          # factor to split MAXD_RAIN into
@@ -237,7 +245,7 @@ TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links
 # # https://pynative.com/list-all-timezones-in-python/#h-get-list-of-all-timezones-name
 # # https://www.timeanddate.com/time/map/
 # # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-# DATE_ORIGIN    = '1950-01-01'               # to store dates as INT
+# DATE_ORIGIN    = '1950-01-01'                       # to store dates as INT
 DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
 """
 SEASONS_MONTHS = [[6,10], None] (equal to Z_CUTS) corresponds to the period (and season!)

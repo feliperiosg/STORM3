@@ -1,3 +1,8 @@
+# https://stackoverflow.com/a/248066/5885810
+from os.path import abspath, dirname, join, exists
+parent_d = dirname(__file__)    # otherwise, will append the path.of.the.tests
+# parent_d = './'               # to be used in IPython
+
 import numpy as np
 from pandas import DataFrame
 from pathlib import Path
@@ -80,28 +85,41 @@ def ASSERT():
             f'set to 0 (zero), for any given season of the run.'
 
 # check that the DEM exists (if you're using Z_CUTS)
-    assertdem = f'NO DEM_FILE!\n'\
-        'You chose to model rainfall at/for different altitudes, i.e., Z_CUTS != [].'\
-        f' Nevertheless, the path to the DEM ({DEM_FILE}) was not correctly set up '\
-        'or the file does not exist.\nPlease ensure that the DEM file exists in the'\
-        ' correct path.\nConversely, you can also switch off the Z_CUTS variable'\
-        ' (i.e., Z_CUTS == [] or None) if you aim to model rainfall regardless altitude.'
     if Z_CUTS:
+        assertdem = f'NO DEM_FILE!\n'\
+            'You chose to model rainfall at/for different altitudes, i.e., Z_CUTS != [].'\
+            f' Nevertheless, the path to the DEM ({DEM_FILE}) was not correctly set up '\
+            'or the file does not exist.\nPlease ensure that the DEM file exists in the'\
+            ' correct path.\nConversely, you can also switch off the Z_CUTS variable'\
+            ' (i.e., Z_CUTS == [] or None) if you aim to model rainfall regardless altitude.'
 # https://stackoverflow.com/a/82852/5885810     (files exists?)
 # https://stackoverflow.com/a/40183030/5885810  (assertion error)
 # https://stackoverflow.com/a/6095782/5885810   (multiple excepts)
-        try:
-            Path( DEM_FILE ).resolve( strict=True )
-        except (FileNotFoundError, TypeError):
+# https://stackoverflow.com/a/46827349/5885810  (None-Type error)
+        # try:
+        #     Path( abspath( join(parent_d, DEM_FILE) ) ).resolve( strict=True )
+        # except (FileNotFoundError, TypeError):
+        #     raise AssertionError( assertdem )
+        # #---
+        # try:
+        #     join(parent_d, DEM_FILE)
+        # except (AttributeError, TypeError):
+        #     raise AssertionError( assertdem )
+# https://stackoverflow.com/a/60324874/5885810  (using os.path.exists)
+# https://therenegadecoder.com/code/how-to-check-if-a-file-exists-in-python/
+        if DEM_FILE is None or not exists( abspath( join(parent_d, DEM_FILE) ) ):
             raise AssertionError( assertdem )
 
 # check that the SHP exists (always!)
-    try:
-        Path( SHP_FILE ).resolve( strict=True )
-    except (FileNotFoundError, TypeError):
-        raise AssertionError( f'NO SHP_FILE!\n'\
-            f'The path to the SHP file ({SHP_FILE}) was not correctly set up or the file'\
-            ' does not exist.\nPlease ensure that the SHP file exists in the correct path.' )
+    assertshp = f'NO SHP_FILE!\n'\
+        f'The path to the SHP file ({SHP_FILE}) was not correctly set up or the file'\
+        ' does not exist.\nPlease ensure that the SHP file exists in the correct path.'
+    # try:
+    #     Path( abspath( join(parent_d, SHP_FILE) ) ).resolve( strict=True )
+    # except (FileNotFoundError, TypeError):
+    #     raise AssertionError( assertshp )
+    if SHP_FILE is None or not exists( abspath( join(parent_d, SHP_FILE) ) ):
+        raise AssertionError( assertshp )
 
 # check that the SEASON_MONTHS exists and/or are correctly set up
     assertext = f'You chose to model {SEASONS} season(s) but there is/are either'\
@@ -161,11 +179,12 @@ def WELCOME():
     'n/a' == scenario NOT DEFINED (as both xxx_SC & xxx_SF differ from 0)
     """
 # infer scenarios
-    PTOT_SCENARIO = INFER_SCENARIO(PTOT_SC, PTOT_SF, tab_ptot, tab_sign)
-    STORMINESS_SCENARIO = INFER_SCENARIO(STORMINESS_SC, STORMINESS_SF, tab_storm, tab_sign)
+    PTOT_SCENARIO = INFER_SCENARIO( PTOT_SC, PTOT_SF, tab_ptot, tab_sign )
+    STORMINESS_SCENARIO = INFER_SCENARIO( STORMINESS_SC, STORMINESS_SF, tab_storm, tab_sign )
 # create OUT_PATH folder (if it doen'st exist already)
 # https://stackoverflow.com/a/50110841/5885810  (create folder if exisn't)
-    Path( OUT_PATH ).mkdir(parents=True, exist_ok=True)
+    # Path( OUT_PATH ).mkdir(parents=True, exist_ok=True)
+    Path( abspath( join(parent_d, OUT_PATH) ) ).mkdir(parents=True, exist_ok=True)
 # define NC.output file.names
     NC_NAMES =  list(map( lambda a,b,c: f'{OUT_PATH}/RUN_'\
         f'{datetime.now(tzlocal()).strftime("%y%m%dT%H%M")}_S{a+1}_{b.strip()}_'\

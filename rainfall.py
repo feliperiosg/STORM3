@@ -8,8 +8,9 @@ import warnings
 # https://stackoverflow.com/a/9134842/5885810     (supress warning by message)
 warnings.filterwarnings('ignore', message='You will likely lose important projection '\
                         'information when converting to a PROJ string from another format')
-# warnings.filterwarnings('ignore', message='Failed to load cfgrib - most likely '\
-#                         'there is a problem accessing the ecCodes library.')
+# WOS doesn't deal with "ecCodes"
+warnings.filterwarnings('ignore', message='Failed to load cfgrib - most likely '\
+                        'there is a problem accessing the ecCodes library.')
 # because the "EPSG_CODE = 42106" is not a standard proj?
 warnings.filterwarnings('ignore', message="GeoDataFrame's CRS is not "\
                         "representable in URN OGC format")
@@ -18,6 +19,11 @@ warnings.filterwarnings('ignore', message=".*`Geometry` class will deprecated '\
                         'and removed in a future version of libpysal*")
 # https://github.com/slundberg/shap/issues/2909    (suppresing the one from numba 0.59.0)
 warnings.filterwarnings('ignore', message=".*The 'nopython' keyword.*")
+
+# https://stackoverflow.com/a/248066/5885810
+from os.path import abspath, dirname, join
+parent_d = dirname(__file__)    # otherwise, will append the path.of.the.tests
+# parent_d = './'               # to be used in IPython
 
 import numpy as np
 import pandas as pd
@@ -31,7 +37,15 @@ from numpy import random as npr
 from statsmodels.distributions.copula.api import GaussianCopula
 # # from statsmodels.distributions.empirical_distribution import ECDF
 from scipy.interpolate import interp1d
+
 from osgeo import gdal
+# https://gdal.org/api/python_gotchas.html#gotchas-that-are-by-design-or-per-history
+# https://github.com/OSGeo/gdal/blob/master/NEWS.md#ogr-370---overview-of-changes
+if gdal.__version__.__getitem__(0) == '3':# enable exceptions for GDAL<=4.0
+    gdal.UseExceptions()
+    # gdal.DontUseExceptions()
+    # gdal.__version__ # wos_ '3.6.2' # linux_ '3.7.0'
+
 from rasterio import fill
 # from rasterio import crs as rcrs
 from zoneinfo import ZoneInfo
@@ -54,6 +68,7 @@ from realization import READ_REALIZATION, REGIONALISATION, EMPTY_MAP
 """ STORM3.0 ALSO runs WITHOUT this library!!! """
 import vonMisesMixtures as vonmises
 
+
 #~ INSTALLING THE vonMisesMixtures PACKAGE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 """
@@ -74,9 +89,8 @@ path-to-miniconda3//envs/prll/lib/python3.10/site-packages  (linux)
 path-to-miniconda3\\envs\py39\Lib\site-packages             (windows)
 that's it you're all set now!
 """
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-
 """
 STORM [STOchastic Rainfall Model] produces realistic regional or watershed rainfall under various
 climate scenarios based on empirical-stochastic selection of historical rainfall characteristics.
@@ -89,182 +103,172 @@ version name: STORM3
 Authors:
     Manuel F. Rios Gaona 2023
 Date created : 2023/05/11
-Last modified: 2023/08/23
+Last modified: 2023/09/06
 """
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 
 #%% INPUT PARAMETERS
 
-# # """
-# # STORM3.0 RUNS WITH THE PARAMETERS BELOW (PLACED HERE FOR 'ILUSTRATIVE' PURPOSES).
-# # THEIR TWEAKING SHOULD EXCLUSIVELY BE DONE IN THE FILE 'parameters.py'.
-# # 'parameters.py' ALSO OFFERS A MORE DETAILED EXPLANATION ON THEIR MEANING/VALUES.
+"""
+SEASONS = 1             # Number of Seasons (per Run)
+NUMSIMS = 2#1#2         # Number of runs per Season
+NUMSIMYRS = 1#2         # Number of years per run (per Season)
 
-# SEASONS = 1             # Number of Seasons (per Run)
-# NUMSIMS = 1#2             # Number of runs per Season
-# NUMSIMYRS = 1#1           # Number of years per run (per Season)
-# """
-# *** perhaps, either NUMSIMS or NUMSIMYRS or both has/have to be re-thought?,
-#     because i can't really have multiple SIMULATED-YEARS each one containing
-#     multiple SIMULATION-NUMBERS/exercises, each one of (potential) 1000's of
-#     half-hourly time-steps/stamps... it'll take a lot of space in the NC.output!
-# """
+# # PARAMETER = [ S1 ]
+PTOT_SC       = [0.00]
+PTOT_SF       = [ 0.0]
+STORMINESS_SC = [-0.0]
+STORMINESS_SF = [+0.0]
 
-# # # # PARAMETER = [ S1 ]
-# # PTOT_SC       = [0.00]
-# # PTOT_SF       = [ 0.0]
-# # STORMINESS_SC = [-0.0]
-# # STORMINESS_SF = [+0.0]
+# PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG.csv'      # output from 'pre_processing.py'
+# PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG-pmf.csv'  # output from 'pre_processing.py'
+SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file in WGS84
+# DEM_FILE = './model_input/dem/WGdem_wgs84.tif'        # aoi raster-file (optional**)
+# DEM_FILE = './model_input/dem/WGdem_26912.tif'        # aoi raster-file in local CRS (***)
+DEM_FILE = None
+OUT_PATH = './model_output'                             # output folder
 
-# # PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG.csv'      # output from 'pre_processing.py'
-# # # PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG-pmf.csv'  # output from 'pre_processing.py'
-# SHP_FILE = './model_input/HAD_basin.shp'                            # catchment shape-file in WGS84
-# # DEM_FILE = './model_input/dem/WGdem_wgs84.tif'                      # aoi raster-file (optional**)
-# # # DEM_FILE = './model_input/dem/WGdem_26912.tif'                    # aoi raster-file in local CRS (***)
-# DEM_FILE = None
-# OUT_PATH = './model_output'                                         # output folder
+# RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
+# RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
+RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
+SUBGROUP = ''
+CLUSTERS = 1#4#1                                        # number of regions to split the whole.region into
 
-# # RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# # RAIN_MAP = './realisation_MAM_crs-wrong.nc'                         # no..interpretable CRS
-# RAIN_MAP = './realisation_MAM_crs-OK.nc'                            # yes.interpretable CRS
-# SUBGROUP = ''
-# CLUSTERS = 4                                                        # number of regions to split the whole.region into
-# # CLUSTERS = 1
-# """
-# *** CLUSTERS==1 -> means no splitting at all!.
-#     The model still 'splits' the region into 1 big area equal to the catchment.
-# """
+Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
+# Z_CUTS = [1350, 1500]     # in meters!
+Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
 
-# Z_CUTS = None           # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-# # Z_CUTS = [1350, 1500]   # in meters!
-# Z_STAT = 'mean'         # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
-
-# # # EPSG:42106 is not implemented in PyProj (or anywhere else) :'(
-# # EPSG_CODE = 42106       # EPSG Code of the local/regular Coordinate Reference System (https://epsg.io/42106)
-# PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
-# # PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +type=crs'
-# # PROJ4_STR = '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
-
-# WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
-#     'GEOGCS["unknown",'\
-#         'DATUM["unknown",'\
-#             'SPHEROID["Normal Sphere (r=6370997)",6370997,0]],'\
-#         'PRIMEM["Greenwich",0,'\
-#             'AUTHORITY["EPSG","8901"]],'\
-#         'UNIT["degree",0.0174532925199433,'\
-#             'AUTHORITY["EPSG","9122"]]],'\
+# OGC-WKT for HAD [taken from https://epsg.io/42106]
+WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
+    'GEOGCS["unknown",'\
+        'DATUM["unknown",'\
+            'SPHEROID["Normal Sphere (r=6370997)",6370997,0]],'\
+        'PRIMEM["Greenwich",0,'\
+            'AUTHORITY["EPSG","8901"]],'\
+        'UNIT["degree",0.0174532925199433,'\
+            'AUTHORITY["EPSG","9122"]]],'\
+    'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
+    'PARAMETER["latitude_of_center",5],'\
+    'PARAMETER["longitude_of_center",20],'\
+    'PARAMETER["false_easting",0],'\
+    'PARAMETER["false_northing",0],'\
+    'UNIT["metre",1,'\
+        'AUTHORITY["EPSG","9001"]],'\
+    'AXIS["Easting",EAST],'\
+    'AXIS["Northing",NORTH],'\
+    'AUTHORITY["EPSG","42106"]]'
+# # ESRI-WKT for HAD [alternative?]
+# WKT_OGC = 'PROJCS["WGS84 / Lambert Azim Mozambique",'\
+#     'GEOGCS["WGS 84",'\
+#         'DATUM["WGS_1984",'\
+#             'SPHEROID["WGS_1984",6378137,298.257223563]],'\
+#         'PRIMEM["Greenwich",0],'\
+#         'UNIT["Decimal_Degree",0.0174532925199433]],'\
 #     'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
-#     'PARAMETER["latitude_of_center",5],'\
-#     'PARAMETER["longitude_of_center",20],'\
-#     'PARAMETER["false_easting",0],'\
-#     'PARAMETER["false_northing",0],'\
-#     'UNIT["metre",1,'\
-#         'AUTHORITY["EPSG","9001"]],'\
-#     'AXIS["Easting",EAST],'\
-#     'AXIS["Northing",NORTH],'\
-#     'AUTHORITY["EPSG","42106"]]'
-# # WKT_OGC = 'PROJCS["WGS84 / Lambert Azim Mozambique",'\
-# #     'GEOGCS["WGS 84",'\
-# #         'DATUM["WGS_1984",'\
-# #             'SPHEROID["WGS_1984",6378137,298.257223563]],'\
-# #         'PRIMEM["Greenwich",0],'\
-# #         'UNIT["Decimal_Degree",0.0174532925199433]],'\
-# #     'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
-# #     'PARAMETER["latitude_of_origin",5],'\
-# #     'PARAMETER["central_meridian",20],'\
-# #     'UNIT["Meter",1]]'
+#     'PARAMETER["latitude_of_origin",5],'\
+#     'PARAMETER["central_meridian",20],'\
+#     'UNIT["Meter",1]]'
+# # ---------------------------------------------------
+# # OGC-WKT for WGS84 [taken from https://epsg.io/4326]
+# WGS84_WKT = 'GEOGCS["WGS 84",'\
+#     'DATUM["WGS_1984",'\
+#         'SPHEROID["WGS 84",6378137,298.257223563,'\
+#             'AUTHORITY["EPSG","7030"]],'\
+#         'AUTHORITY["EPSG","6326"]],'\
+#     'PRIMEM["Greenwich",0,'\
+#         'AUTHORITY["EPSG","8901"]],'\
+#     'UNIT["degree",0.0174532925199433,'\
+#         'AUTHORITY["EPSG","9122"]],'\
+#     'AUTHORITY["EPSG","4326"]]'
 
-# # #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# """
-# USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION() -> [GRID.based 1ST]"
-# """
-# # # DRYP actual/current grid
-# # XLLCORNER =  1319567.308750340249                       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-# # YLLCORNER = -1170429.328196450602                       # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-# # X_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # Y_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # N_X       =     2313                                    # number of cells/pxls in the X-axis
-# # N_Y       =     2614                                    # number of cells/pxls in the Y-axis
-# # PARAMETERS for a HAD-tight-adjusted GRID ( 5km res)
-# BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
-# X_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+# #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# # USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION_GRID() -> [GRID.based 1ST]"
+# # DRYP actual/current grid
+# XLLCORNER =  1319567.308750340249                       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
+# YLLCORNER = -1170429.328196450602                       # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
+# X_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
+# Y_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
+# N_X       =     2313                                    # number of cells/pxls in the X-axis
+# N_Y       =     2614                                    # number of cells/pxls in the Y-axis
+# PARAMETERS for a HAD-tight-adjusted GRID ( 5km res)
+BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
+X_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+Y_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
 # XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
 # YLLCORNER = -1165000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
 # N_X       =  int(405  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
 # N_Y       =  int(464  +np.ceil(BUFFER /Y_RES)  *2)      # number of cells/pxls in the Y-axis
-# # # PARAMETERS for a HAD-tight-adjusted GRID (10km res)
-# # BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
-# # X_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # Y_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-# # YLLCORNER = -1170000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-# # N_X       =  int(203  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
-# # N_Y       =  int(233  +np.ceil(BUFFER /Y_RES)  *2)      # number of cells/pxls in the Y-axis
-# # #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# from: https://stackoverflow.com/a/62264948/5885810
+XLLCORNER =  1350000. -(-1 *(BUFFER /X_RES) //1 *-1) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
+YLLCORNER = -1165000. -(-1 *(BUFFER /Y_RES) //1 *-1) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
+N_X       =  int(405  +(-1 *(BUFFER /X_RES) //1 *-1)  *2)      # number of cells/pxls in the X-axis
+N_Y       =  int(464  +(-1 *(BUFFER /Y_RES) //1 *-1)  *2)      # number of cells/pxls in the Y-axis
+# # PARAMETERS for a HAD-tight-adjusted GRID (10km res)
+# BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
+# X_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+# Y_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+# XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
+# YLLCORNER = -1170000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
+# N_X       =  int(203  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
+# N_Y       =  int(233  +np.ceil(BUFFER /Y_RES)  *2)      # number of cells/pxls in the Y-axis
+# #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# # #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# """
-# USE ANY OF THE FOLLOWING X_Y PAIRS, IF USING "SHP_REGION() -> [BUFFER.based 1ST]"
-# """
-# BUFFER    =  8000.                      # in meters! -> buffer distance (out of the HAD)
-# X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # X_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# # #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# # USE ANY OF THE FOLLOWING X_Y PAIRS, IF USING "SHP_REGION() -> [BUFFER.based 1ST]"
+BUFFER    =  8000.                      # in meters! -> buffer distance (out of the HAD)
+X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+# X_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+# Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+# X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+# Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
+# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# CLOSE_DIS =  0.15                       # in km -> small circle emulating the storm centre's point/dot
-# RINGS_DIS =  2.1                        # in km -> distance between (rainfall) rings; heavily dependant on X_Y_RES
-# # storm minimum radius depends on spatial.resolution (for raster purposes);
-# # it must be used/assigned in KM, as its distribution was 'computed' in KM
-# MINRADIUS =  np.max([X_RES, Y_RES]) /1e3
-# # distance between (rainfall) rings; heavily dependant on X_Y_RES | MINRADIUS
-# RINGS_DIS =  MINRADIUS *(2) +.1         # in km
+CLOSE_DIS =  0.15                       # in km -> small circle emulating the storm centre's point/dot
+MINRADIUS =  max([X_RES, Y_RES]) /1e3
+RINGS_DIS =  MINRADIUS *(2) +.1         # in km -> distance between (rainfall) rings; heavily dependant on X_Y_RES
 
+T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
+NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
+MIN_DUR =  2                            # in minutes!
+MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
+# # OR:
+# MIN_DUR =  []                           # use 'void' arrays if you want NO.CONSTRAINT on storm-duration
+# MAX_DUR =  []                           # ... in either (or both) MIN_/MAX_DUR parameters/constants
+# designed MAXIMUM rainfall for T_RES!! (Twice of that of IMERG!) [note also that 120 << 131.068_iMAX]
+MAXD_RAIN = 60 *2                       # in mm
+DISPERSE_ = .2                          # factor to split MAXD_RAIN into
 
-# NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
-# MIN_DUR =  2                            # in minutes!
-# MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
-# # # OR:
-# # MIN_DUR =  []                           # use 'void' arrays if you want NO.CONSTRAINT on storm-duration
-# # MAX_DUR =  []                           # ... in either (or both) MIN_/MAX_DUR parameters/constants
+# SEED_YEAR  = None                       # for your SIM/VAL to start in the current year
+SEED_YEAR = 2023                        # for your SIM/VAL to start in 2050
+### bear in mind the 'SEASONS' variable!... (when toying with 'SEASONS_MONTHS')
+# SEASONS_MONTHS = [[6,10], None]         # JUNE through OCTOBER (just ONE season)
+# # OR:
+SEASONS_MONTHS = [['mar','may'], ['oct','dec']]     # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
+# SEASONS_MONTHS = [[10,5], ['jul','sep']]            # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
+# SEASONS_MONTHS = [['may','sep'],[11,12]]            # MAY through SEP (& e.g., NOV trhough DEC)
+TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
+# # OR:
+# TIME_ZONE    = 'UTC'
+# DATE_ORIGIN    = '1950-01-01'                       # to store dates as INT
+DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
 
-# T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
-# # designed MAXIMUM rainfall for T_RES!! (Twice of that of IMERG!) [note also that 120 << 131.068_iMAX]
-# MAXD_RAIN = 60 *2                       # in mm
-# DISPERSE_ = .2                          # factor to split MAXD_RAIN into
-
-# ### these parameters allow to pin down a time-dimension to the storms
-# # SEED_YEAR  = None                       # for your SIM/VAL to start in the current year
-# SEED_YEAR = 2023                        # for your SIM/VAL to start in 2050
-# ### bear in mind the 'SEASONS' variable!... (when toying with 'SEASONS_MONTHS')
-# # SEASONS_MONTHS = [[6,10], None]         # JUNE through OCTOBER (just ONE season)
-# # # OR:
-# SEASONS_MONTHS = [['mar','may'], ['oct','dec']]     # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# # SEASONS_MONTHS = [[10,5], ['jul','sep']]            # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# # SEASONS_MONTHS = [['may','sep'],[11,12]]            # MAY through SEP (& e.g., NOV trhough DEC)
-# TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
-# # # OR:
-# # TIME_ZONE    = 'UTC'
-# # # https://stackoverflow.com/a/64861179/5885810    (zoneinfo list)
-# # # https://pynative.com/list-all-timezones-in-python/#h-get-list-of-all-timezones-name
-# # # https://www.timeanddate.com/time/map/
-# # # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-# DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
-
-# ### only touch this parameter if you really know what you're doing!!)
-# RAINFMT = 'u2'                          # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
-# PRECISION = 0.002                       # output precision
-# # TIME dimension
-# TIMEINT = 'u4'                          # format for integers in TIME dimension
-# TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
-# TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
-# # TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
-# TIME_DICT_ = dict(seconds=1 ,minutes=1/60, hours=1/60**2, days=1/(60**2*24))
-# # """
+### only touch this parameter if you really know what you're doing!!)
+# RAINFMT = 'f4'
+RAINFMT = 'u2'                          # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
+                                        # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
+# SIGNINT = 'u'                           # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
+# INTEGER = 2                             # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
+# # INTEGER = 4                             # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
+PRECISION = 0.002                       # output precision
+# TIME dimension
+TIMEINT = 'u4'                          # format for integers in TIME dimension
+TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
+TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
+# TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
+TIME_DICT_ = dict(seconds=1 ,minutes=1/60, hours=1/60**2, days=1/(60**2*24))
+"""
 
 
 #%% FUNCTIONS' DEFINITION
@@ -285,7 +289,7 @@ def PAR_UPDATE( args ):
 #~ DEFINE THE DAYS OF THE SEASON (to 'sample' from) ~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def WET_SEASON_DAYS():
-    global SEED_YEAR, M_LEN, DATE_POOL, DOY_POOL, DATE_ORIGIN
+    global SEED_YEAR, M_LEN, DATE_POOL, DOY_POOL, DATE_ORIGEN
     SEED_YEAR = SEED_YEAR if SEED_YEAR else datetime.now().year
 # which season is None/void/null
     mvoid = list(map(lambda x:None in x, zip(SEASONS_MONTHS)))
@@ -313,131 +317,170 @@ def WET_SEASON_DAYS():
 # convert DATE_ORIGIN into 'datetime' (just to not let this line hanging out all alone)
 # https://stackoverflow.com/q/70460247/5885810  (timezone no pytz)
 # https://stackoverflow.com/a/65319240/5885810  (replace timezone)
-    DATE_ORIGIN = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
+    DATE_ORIGEN = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
         tzinfo=ZoneInfo(TIME_ZONE))
 
 
-# #~ WORKING OUT THE CATCHMENT (& ITS BUFFER) MASK(S) [GRID.based 1ST] ~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def SHP_REGION():
-#     """
-#     # DRYP actual/current grid
-#     XLLCORNER =  1319567.308750340249       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-#     YLLCORNER = -1170429.328196450602       # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-#     X_RES     =      919.241896152628       # in meters! (pxl.resolution for the 'regular/local' CRS)
-#     Y_RES     =      919.241896152628       # in meters! (pxl.resolution for the 'regular/local' CRS)
-#     N_X       =     2313                    # number of cells/pxls in the X-axis
-#     N_Y       =     2614                    # number of cells/pxls in the Y-axis
-#     """
-#     global llim, rlim, blim, tlim, BUFFRX, CATCHMENT_MASK, XS, YS
-# # infering (and rounding) the limits of the buffer-zone
-#     # # this way COULD ALSO be... but it's not what DRYP.ASC means
-#     # llim = XLLCORNER - X_RES *1/2
-#     # rlim = XLLCORNER + X_RES *(N_X -1/2)
-#     # blim = YLLCORNER - Y_RES *1/2
-#     # tlim = YLLCORNER + Y_RES *(N_Y -1/2)
-#     llim = XLLCORNER
-#     rlim = XLLCORNER + X_RES *N_X
-#     blim = YLLCORNER
-#     tlim = YLLCORNER + Y_RES *N_Y
-# # read WG-catchment shapefile (assumed to be in WGS84)
-#     wtrwgs = gpd.read_file( SHP_FILE )
-# # transform it into EPSG:42106 & update & the buffer
-# # https://gis.stackexchange.com/a/328276/127894 (geo series into gpd)
-#     # wtrshd = wtrwgs.to_crs( epsg=EPSG_CODE )
-#     wtrshd = wtrwgs.to_crs( crs =PROJ4_STR )
-#     # wtrshd = wtrwgs.to_crs( crs =WKT_OGC ) # //epsg.io/42106.wkt
-# # this assumes for the edges of the grid to engulf the catchment.shape
-#     bufdif = np.array([-(llim -wtrshd.bounds.minx[0]), (rlim -wtrshd.bounds.maxx[0]),
-#         -(blim -wtrshd.bounds.miny[0]), (tlim -wtrshd.bounds.maxy[0])])
-# # is the catchment.SHP fully within the GRID.bounds??
-#     assert not (bufdif <0).any(), f'Cathment.SHP out of boundaries!\nPlease, '\
-#         f'ensure that the GRID.edges fully engulf the catchment.SHP.'
-#     BUFFER = np.floor( bufdif.min() )
-#     BUFFRX = gpd.GeoDataFrame(geometry=wtrshd.buffer( BUFFER ))#.to_crs(epsg=4326)
-# # #~IN.CASE.YOU.WANNA.XPORT.THE.MASK+BUFFER.as.geoTIFF~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #     tmp_file = 'tmp-raster.tif'
-# #     tmp = gdal.Rasterize(tmp_file, BUFFRX.to_json(), xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1,
-# #         allTouched=True, outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim], format='GTiff',
-# #         # targetAlignedPixels=True,
-# #         targetAlignedPixels=False, # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-# #         # outputSRS=f'EPSG:{WGEPSG}')
-# #         outputSRS=f'{PROJ4_STR}')
-# #     var = tmp.ReadAsArray()
-# #     tmp = None
-# # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# # #~some.PLOTTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #     import matplotlib.pyplot as plt
-# #     plt.imshow(var, interpolation='none')
-# #     plt.show()
-# #     # OR
-# #     from rasterio.plot import show
-# #     from rasterio import open as ropen
-# #     tmp_file = 'tmp-raster.tif'
-# #     srcras = ropen(tmp_file)
-# #     fig, ax = plt.subplots()
-# #     ax = show(srcras, ax=ax, cmap='viridis', extent=[
-# #         srcras.bounds[0], srcras.bounds[2], srcras.bounds[1], srcras.bounds[3]])
-# #     srcras.close()
-# # #~and.some.XTRA.TESTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #    # # https://gis.stackexchange.com/q/344942/127894   (flipped raster)
-# #    # ds = gdal.Open('tmp-raster.tif')
-# #    # gt = ds.GetGeoTransform()
-# #    # if gt[2] != 0.0 or gt[4] != 0.0: print ('file is not stored with north up')
-# # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#~ WORKING OUT THE CATCHMENT (& ITS BUFFER) MASK(S) [GRID.based 1ST] ~~~~~~~~~~#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+def SHP_REGION_GRID():
+    """
+    # DRYP actual/current grid
+    XLLCORNER =  1319567.308750340249       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
+    YLLCORNER = -1170429.328196450602       # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
+    X_RES     =      919.241896152628       # in meters! (pxl.resolution for the 'regular/local' CRS)
+    Y_RES     =      919.241896152628       # in meters! (pxl.resolution for the 'regular/local' CRS)
+    N_X       =     2313                    # number of cells/pxls in the X-axis
+    N_Y       =     2614                    # number of cells/pxls in the Y-axis
+    """
+    global llim, rlim, blim, tlim, XS, YS, CATCHMENT_MASK, BUFFRX, BUFFRX_MASK
+# infering (and rounding) the limits of the buffer-zone
+    # # this way COULD ALSO be... but it's not what DRYP.ASC means
+    # llim = XLLCORNER - X_RES *1/2
+    # rlim = XLLCORNER + X_RES *(N_X -1/2)
+    # blim = YLLCORNER - Y_RES *1/2
+    # tlim = YLLCORNER + Y_RES *(N_Y -1/2)
+    llim = XLLCORNER
+    rlim = XLLCORNER + X_RES *N_X
+    blim = YLLCORNER
+    tlim = YLLCORNER + Y_RES *N_Y
+# read WG-catchment shapefile (assumed to be in WGS84)
+    wtrwgs = gpd.read_file( abspath( join(parent_d, SHP_FILE) ) )
+# transform it into EPSG:42106 & update & the buffer
+# https://gis.stackexchange.com/a/328276/127894 (geo series into gpd)
+    # wtrshd = wtrwgs.to_crs( epsg=42106 )
+    wtrshd = wtrwgs.to_crs( crs = WKT_OGC )          # //epsg.io/42106.wkt
+# this assumes for the edges of the grid to engulf the catchment.shape
+    bufdif = np.array([-(llim -wtrshd.bounds.minx[0]), (rlim -wtrshd.bounds.maxx[0]),
+        -(blim -wtrshd.bounds.miny[0]), (tlim -wtrshd.bounds.maxy[0])])
+# is the catchment.SHP fully within the GRID.bounds??
+    assert not (bufdif <0).any(), f'Cathment.SHP out of boundaries!\nPlease, '\
+        f'ensure that the GRID.edges fully engulf the catchment.SHP.'
+    BUFFER = np.floor( bufdif.min() )
+    BUFFRX = gpd.GeoDataFrame(geometry=wtrshd.buffer( BUFFER ))#.to_crs(epsg=4326)
+#~IN.CASE.YOU.WANNA.XPORT.(OR.USE).THE.MASK+BUFFER.as.geoTIFF~~~~~~~~~~~~~~~~~~#
+    # # ACTIVATE if IN.TIFF
+    # tmp_file = 'tmp-raster_mask-buff_GRID.tif'
+    # tmp = gdal.Rasterize(tmp_file, BUFFRX.to_json(), format='GTiff'
+    # ACTIVATE if IN.MEMORY
+    tmp = gdal.Rasterize('', BUFFRX.to_json(), format='MEM'#, add=0
+        , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
+        , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
+        # , targetAlignedPixels=True
+        , targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
+    # UPDATE needed for outputSRS [in WKT instead of PROJ4]
+        , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
+        # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
+        )
+    BUFFRX_MASK = tmp.ReadAsArray().astype('u1')
+    tmp = None
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# #~XPORT.IT.as.NUMPY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     np.save('tmp-raster_mask-buff_GRID', BUFFRX_MASK.astype('u1'), allow_pickle=True, fix_imports=True)
+# #~DOING PARQUET (awesome compression at this RES!)~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     # after: https://stackoverflow.com/a/68760276/5885810
+#     import pyarrow as pa
+#     import pyarrow.parquet as pq
+#     # create one arrow array per column
+#     arrax = list(map(pa.array, BUFFRX_MASK.astype('u1')))
+#     table = pa.Table.from_arrays(arrax, names=list(map(str, range(len(arrax))))) # give names to each columns
+#     # xport it
+#     pq.write_table(table, 'tmp-raster_mask-buff_GRID.pq')
+# # read it back as numpy (through pandas):
+#     tabpq = pq.read_table('tmp-raster_mask-buff_GRID.pq')
+#     tespq = tabpq.to_pandas().T.to_numpy()
+# # #~some.PLOTTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     import matplotlib.pyplot as plt
+#     plt.imshow(var, interpolation='none')
+#     plt.show()
+#     # OR
+#     from rasterio.plot import show
+#     from rasterio import open as ropen
+#     tmp_file = 'tmp-raster.tif'
+#     srcras = ropen(tmp_file)
+#     fig, ax = plt.subplots()
+#     ax = show(srcras, ax=ax, cmap='viridis', extent=[
+#         srcras.bounds[0], srcras.bounds[2], srcras.bounds[1], srcras.bounds[3]])
+#     srcras.close()
+# #~and.some.XTRA.TESTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#    # # https://gis.stackexchange.com/q/344942/127894   (flipped raster)
+#    # ds = gdal.Open('tmp-raster.tif')
+#    # gt = ds.GetGeoTransform()
+#    # if gt[2] != 0.0 or gt[4] != 0.0: print ('file is not stored with north up')
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# # BURN THE CATCHMENT SHP INTO RASTER (WITH CATCHMENT-BUFFER EXTENSION)
-# # https://stackoverflow.com/a/47551616/5885810  (idx polygons intersect)
-# # https://gdal.org/programs/gdal_rasterize.html
-# # https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
-# # https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
-# # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
+# BURN THE CATCHMENT SHP INTO RASTER (WITH CATCHMENT-BUFFER EXTENSION)
+# https://stackoverflow.com/a/47551616/5885810  (idx polygons intersect)
+# https://gdal.org/programs/gdal_rasterize.html
+# https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
+# https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
+# https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
+    tmp = gdal.Rasterize('', wtrshd.to_json(), format='MEM', add=0
+        , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
+        , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
+        # , targetAlignedPixels=True
+        , targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
+    # UPDATE needed for outputSRS [in WKT instead of PROJ4]
+        , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
+        # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
+        )
+    """
+don't i need to use "targetAlignedPixels=True" here in this case??
+    """
+    CATCHMENT_MASK = tmp.ReadAsArray().astype('u1')
+    tmp = None           # flushing!
+# #~some.more.PLOTTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     import matplotlib.pyplot as plt
+#     plt.imshow(CATCHMENT_MASK, interpolation='none', aspect='equal', origin='upper',
+#         cmap='nipy_spectral_r', extent=(llim, rlim, blim, tlim))
+#     plt.show()
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# #~IN.CASE.YOU.WANNA.XPORT.THE.MASK.as.ASCII~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     # CORRECT.way (as it registers what is NODATA)
 #     tmp = gdal.Rasterize(''
-#         , wtrshd.to_json()
-#         , add=0
-#         , xRes=X_RES, yRes=Y_RES, allTouched=True, noData=0, burnValues=1, format='MEM'
-#         , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
-#         # , targetAlignedPixels=True
-#         , targetAlignedPixels=False
-#         # , outputSRS=f'EPSG:{EPSG_CODE}'
-#         , outputSRS=f'{PROJ4_STR}'
-#         # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
-#         )
+#         , wtrshd.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True, initValues=-9999., burnValues=1., noData=-9999.
+#         , outputType=gdal.GDT_Float32, targetAlignedPixels=False/True, outputBounds=[llim, blim, rlim, tlim]# , add=0
+#         , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4(), format='MEM')
+#     # INCORRECT.way (but is consistent with DRYP.ASC)
+#     tmp = gdal.Rasterize(''
+#         , wtrshd.geometry.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True, initValues=-9999., burnValues=1.
+#         , outputType=gdal.GDT_Float32, targetAlignedPixels=False, outputBounds=[llim, blim, rlim, tlim]
+#         # , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
+#         , format='MEM')
 #     CATCHMENT_MASK = tmp.ReadAsArray()
+#     tmv_file = 'tmp-raster.asc'
+#     tmv = gdal.GetDriverByName( 'AAIGrid' ).CreateCopy(tmv_file, tmp)
+#     tmv = None           # flushing!
 #     tmp = None           # flushing!
-# # #~some.more.PLOTTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #     import matplotlib.pyplot as plt
-# #     plt.imshow(CATCHMENT_MASK, interpolation='none', aspect='equal', origin='upper',
-# #         cmap='nipy_spectral_r', extent=(llim, rlim, blim, tlim))
-# #     plt.show()
-# # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# # #~IN.CASE.YOU.WANNA.XPORT.THE.MASK.as.ASCII~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #     # CORRECT.way (as it registers what is NODATA)
-# #     tmp = gdal.Rasterize(''
-# #         , wtrshd.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True, initValues=-9999., burnValues=1., noData=-9999.
-# #         , outputType=gdal.GDT_Float32, targetAlignedPixels=False/True, outputBounds=[llim, blim, rlim, tlim]# , add=0
-# #         , outputSRS=f'{PROJ4_STR}', format='MEM')
-# #     # INCORRECT.way (but is consistent with DRYP.ASC)
-# #     tmp = gdal.Rasterize(''
-# #         , wtrshd.geometry.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True, initValues=-9999., burnValues=1.
-# #         , outputType=gdal.GDT_Float32, targetAlignedPixels=False, outputBounds=[llim, blim, rlim, tlim]
-# #         # , outputSRS=f'{PROJ4_STR}'
-# #         , format='MEM')
-# #     CATCHMENT_MASK = tmp.ReadAsArray()
-# #     tmv_file = 'tmp-raster.asc'
-# #     tmv = gdal.GetDriverByName( 'AAIGrid' ).CreateCopy(tmv_file, tmp)
-# #     tmv = None           # flushing!
-# #     tmp = None           # flushing!
-# #     import os
-# #     os.unlink(f"./{tmv_file.replace('.asc','.prj')}")
-# # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     import os
+#     os.unlink(f"./{tmv_file.replace('.asc','.prj')}")
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# #~XPORT.IT.as.NUMPY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#     np.save('tmp-raster_mask_GRID', CATCHMENT_MASK.astype('u1'), allow_pickle=True, fix_imports=True)
+# #~XPORT.IT.as.PICKLE [but don't use it for NUMPYs!]~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# # https://stackoverflow.com/a/62883390/5885810
+#     import pickle
+#     with open('tmp-raster_mask_GRID.pkl','wb') as f: pickle.dump(CATCHMENT_MASK.astype('u1'), f)
+# #~DOING PARQUET (awesome compression at this RES!)~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# # after: https://stackoverflow.com/a/68760276/5885810
+#     import pyarrow as pa
+#     import pyarrow.parquet as pq
+#     # create one arrow array per column
+#     arrax = list(map(pa.array, CATCHMENT_MASK.astype('u1')))
+#     table = pa.Table.from_arrays(arrax, names=list(map(str, range(len(arrax))))) # give names to each columns
+#     # xport it
+#     pq.write_table(table, 'tmp-raster_mask_GRID.pq')
+# # read it back as numpy (through pandas):
+#     tabpq = pq.read_table('tmp-raster_mask_GRID.pq')
+#     tespq = tabpq.to_pandas().T.to_numpy()
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# # DEFINE THE COORDINATES OF THE XY.AXES
-#     XS, YS = list(map( lambda a,b,c: np.arange(a +c/2, b +c/2, c),
-#                       [llim,blim],[rlim,tlim],[X_RES,Y_RES] ))
-# # flip YS??
-#     YS = np.flipud( YS )      # -> important...so rasters are compatible with numpys
+# DEFINE THE COORDINATES OF THE XY.AXES
+    XS, YS = list(map( lambda a,b,c: np.arange(a +c/2, b +c/2, c),
+                      [llim,blim],[rlim,tlim],[X_RES,Y_RES] ))
+# flip YS??
+    YS = np.flipud( YS )      # -> important...so rasters are compatible with numpys
 
 
 #~ WORKING OUT THE CATCHMENT (& ITS BUFFER) MASK(S) [BUFFER.based 1ST] ~~~~~~~~#
@@ -447,14 +490,13 @@ def SHP_REGION():
     X_RES     =     5000.                   # in meters! (pxl.resolution for the 'regular/local' CRS)
     Y_RES     =     5000.                   # in meters! (pxl.resolution for the 'regular/local' CRS)
     """
-    global llim, rlim, blim, tlim, BUFFRX, BUFFRX_MASK, CATCHMENT_MASK, XS, YS, REGIONS
+    global llim, rlim, blim, tlim, XS, YS, CATCHMENT_MASK, BUFFRX, BUFFRX_MASK
 # read WG-catchment shapefile (assumed to be in WGS84)
-    wtrwgs = gpd.read_file( SHP_FILE )
+    wtrwgs = gpd.read_file( abspath( join(parent_d, SHP_FILE) ) )
 # transform it into EPSG:42106 & make the buffer    # this code does NOT work!
 # https://gis.stackexchange.com/a/328276/127894     (geo series into gpd)
-    # wtrshd = wtrwgs.to_crs( epsg=EPSG_CODE )
-    # wtrshd = wtrwgs.to_crs( crs =PROJ4_STR )
-    wtrshd = wtrwgs.to_crs( crs =WKT_OGC )          # //epsg.io/42106.wkt
+    # wtrshd = wtrwgs.to_crs( epsg=42106 )
+    wtrshd = wtrwgs.to_crs( crs = WKT_OGC )          # //epsg.io/42106.wkt
     BUFFRX = gpd.GeoDataFrame(geometry=wtrshd.buffer( BUFFER ))#.to_crs(epsg=4326)
 # infering (and rounding) the limits of the buffer-zone
     llim = np.floor( BUFFRX.bounds.minx[0] /X_RES ) *X_RES #+X_RES/2
@@ -467,16 +509,12 @@ def SHP_REGION():
     # tmp_file = 'tmp-raster_mask-buff.tif'
     # tmp = gdal.Rasterize(tmp_file, BUFFRX.to_json(), format='GTiff'
     # ACTIVATE if IN.MEMORY
-    tmp = gdal.Rasterize('', BUFFRX.to_json(), format='MEM'
+    tmp = gdal.Rasterize('', BUFFRX.to_json(), format='MEM'#, add=0
         , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
         , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
         , targetAlignedPixels=True
         # , targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-#!!
-# UPDATE HERE -> outputSRS [in WKT instead of PROJ4]
-#!!
-    # OR! USE THE PROPER WKT!
-        #  outputSRS=f'EPSG:{EPSG_CODE}'#f'{PROJ4_STR}'
+    # UPDATE needed for outputSRS [in WKT instead of PROJ4]
         , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
         # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
         )
@@ -489,6 +527,9 @@ def SHP_REGION():
 # # https://stackoverflow.com/a/62883390/5885810
 #     import pickle
 #     with open('tmp-raster_mask-buff.pkl','wb') as f: pickle.dump(BUFFRX_MASK.astype('u1'), f)
+# # read it back as numpy (through pandas)
+#     with open('tmp-raster_mask-buff.pkl', 'rb') as db_file:
+#         db_pkl = pickle.load( db_file )
 # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # #~some.PLOTTING~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #     import matplotlib.pyplot as plt
@@ -517,18 +558,12 @@ def SHP_REGION():
 # https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
 # https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
 # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
-    tmp = gdal.Rasterize(''
-        , wtrshd.to_json()
-        , add=0
-        , xRes=X_RES, yRes=Y_RES, allTouched=True, noData=0, burnValues=1, format='MEM'
+    tmp = gdal.Rasterize('', wtrshd.to_json(), format='MEM', add=0
+        , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
         , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
         , targetAlignedPixels=True
         # ,targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-        # , outputSRS=f'EPSG:{EPSG_CODE}'#f'{PROJ4_STR}'
-#!!
-# UPDATE HERE -> outputSRS [in WKT instead of PROJ4]
-#!!
-    # OR! USE THE PROPER WKT!
+    # UPDATE needed for outputSRS [in WKT instead of PROJ4]
         , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
         # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
         )
@@ -560,6 +595,9 @@ def SHP_REGION():
 # # https://stackoverflow.com/a/62883390/5885810
 #     import pickle
 #     with open('tmp-raster_mask.pkl','wb') as f: pickle.dump(CATCHMENT_MASK.astype('u1'), f)
+# # read it back as numpy (through pandas)
+#     with open('tmp-raster_mask-buff.pkl', 'rb') as db_file:
+#         db_pkl = pickle.load( db_file )
 # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 # DEFINE THE COORDINATES OF THE XY.AXES
@@ -577,133 +615,130 @@ def SHP_REGION():
 #- CONSTRUCT THE PDFs (TO SAMPLE FROM) ------------------------------- (START) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# #~ READ THE CSV.FILE(s) PRODUCED BY THE preprocessing.py SCRIPT ~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def READ_PDF_PAR():
-#     global PDFS
-# # read PDF-parameters
-# # https://stackoverflow.com/a/58227453/5885810  (import tricky CSV)
-#     PDFS = pd.read_fwf(PRE_FILE, header=None)
-#     PDFS = PDFS.__getitem__(0).str.split(',', expand=True).set_index(0).astype('f8')
+#~ READ THE CSV.FILE(s) PRODUCED BY THE preprocessing.py SCRIPT ~~~~~~~~~~~~~~~#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+def READ_PDF_PAR():
+    global PDFS
+# read PDF-parameters
+# https://stackoverflow.com/a/58227453/5885810  (import tricky CSV)
+    PDFS = pd.read_fwf(abspath( join(parent_d, PRE_FILE) ), header=None)
+    # PDFS = pd.read_fwf(PRE_FILE, header=None)
+    PDFS = PDFS.__getitem__(0).str.split(',', expand=True).set_index(0).astype('f8')
 
 
-# #~ CONSTRUCT PDFs FROM PARAMETERS (stored in 'PDFS') ~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def RETRIEVE_PDF( TAG ):
-# # TAG: core label/index (in PDFS variable) to construct the pdf on
-#     subset = PDFS[PDFS.index.str.contains( TAG )].dropna(how='all', axis='columns')
+#~ CONSTRUCT PDFs FROM PARAMETERS (stored in 'PDFS') ~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+def RETRIEVE_PDF( TAG ):
+# TAG: core label/index (in PDFS variable) to construct the pdf on
+    subset = PDFS[PDFS.index.str.contains( TAG )].dropna(how='all', axis='columns')
 
-# # necessary block as tags COPULA_RHO, MAXINT_PDF, AVGDUR_PDF might have Z-bands
-#     line = subset.index.str.contains(pat='[Z]\d{1,2}(?!\d)|100')
-# # https://stackoverflow.com/a/6400969/5885810   # regex for 1-100
-# # ...in case somebody goes crazy having up to 100 Z-bands!! ('[Z][1-9]' -> otherwise)
-#     if line.any() == True and Z_CUTS:
-#         # print('correct!')
-#         subset = subset[ line ]
-#         name = np.unique( list(zip( *subset.index.str.split('+') )).__getitem__(1) )
-#     else:
-#         subset = subset[ ~line ]
-#         name = ['']                 # makes "distros" 'universal'
+# necessary block as tags COPULA_RHO, MAXINT_PDF, AVGDUR_PDF might have Z-bands
+    line = subset.index.str.contains(pat='[Z]\d{1,2}(?!\d)|100')
+# https://stackoverflow.com/a/6400969/5885810   # regex for 1-100
+# ...in case somebody goes crazy having up to 100 Z-bands!! ('[Z][1-9]' -> otherwise)
+    if line.any() == True and Z_CUTS:
+        # print('correct!')
+        subset = subset[ line ]
+        name = np.unique( list(zip( *subset.index.str.split('+') )).__getitem__(1) )
+    else:
+        subset = subset[ ~line ]
+        name = ['']                 # makes "distros" 'universal'
 
-# # https://www.geeksforgeeks.org/python-get-first-element-of-each-sublist/
-#     first = list(list(zip( *subset.index.str.split('+') )).__getitem__(0))
-# # https://stackoverflow.com/a/6979121/5885810   (numpy argsort equivalent)
-# # https://stackoverflow.com/a/5252867/5885810
-# # https://stackoverflow.com/a/46453340/5885810  (difference between strings)
-#     sort_id = np.unique( list(map( lambda x: x.replace(TAG, ''), first )) )
-# # the line below makes 1st-PDFs be chosen by default
-#     sort_id = sort_id[ np.argsort( sort_id.astype('int') )  ]
-# # # TIP: USE THE LINE BELOW (REPLACING THE LINE ABOVE) IF YOU PREFER 2nd-ids-PDF INSTEAD
-# # # https://stackoverflow.com/a/16486305/5885810
-# #     sort_id = sort_id[ np.argsort( sort_id.astype('int') )[::-1]  ]
-#     group = [subset[subset.index.str.contains( f'{TAG}{i}' )].dropna(
-#         how='all', axis='columns') for i in sort_id]
+# https://www.geeksforgeeks.org/python-get-first-element-of-each-sublist/
+    first = list(list(zip( *subset.index.str.split('+') )).__getitem__(0))
+# https://stackoverflow.com/a/6979121/5885810   (numpy argsort equivalent)
+# https://stackoverflow.com/a/5252867/5885810
+# https://stackoverflow.com/a/46453340/5885810  (difference between strings)
+    sort_id = np.unique( list(map( lambda x: x.replace(TAG, ''), first )) )
+# the line below makes 1st-PDFs be chosen by default
+    sort_id = sort_id[ np.argsort( sort_id.astype('int') )  ]
+# # TIP: USE THE LINE BELOW (REPLACING THE LINE ABOVE) IF YOU PREFER 2nd-ids-PDF INSTEAD
+# # https://stackoverflow.com/a/16486305/5885810
+#     sort_id = sort_id[ np.argsort( sort_id.astype('int') )[::-1]  ]
+    group = [subset[subset.index.str.contains( f'{TAG}{i}' )].dropna(
+        how='all', axis='columns') for i in sort_id]
 
-#     if TAG == 'DATIME_VMF' or TAG == 'DOYEAR_VMF':
-# # https://cmdlinetips.com/2018/01/5-examples-using-dict-comprehension/
-# # https://blog.finxter.com/how-to-create-a-dictionary-from-two-numpy-arrays/
-#         distros = [{A:B for A, B in zip(['p','mus','kappas'],
-#             [i.to_numpy() for item, i in G.T.iterrows()])} for G in group]
-#     elif TAG == 'COPULA_RHO':
-#         distros = [{A:B for A, B in zip(name if Z_CUTS else name,\
-#             [i.values.ravel().__getitem__(0) for item, i in G.iterrows()])} for G in group]
-#     else:
-#         distros = [{A:B for A, B in zip(name,
-#             [eval(f"stats.{item.split('+').__getitem__(-1)}"\
-#                   # f"({','.join( i.astype('str').values.ravel() )})")\
-#                   f"({','.join( i.dropna().astype('str').values.ravel() )})")\
-#                  for item, i in G.iterrows()] )} for G in group]
+    if TAG == 'DATIME_VMF' or TAG == 'DOYEAR_VMF':
+# https://cmdlinetips.com/2018/01/5-examples-using-dict-comprehension/
+# https://blog.finxter.com/how-to-create-a-dictionary-from-two-numpy-arrays/
+        distros = [{A:B for A, B in zip(['p','mus','kappas'],
+            [i.to_numpy() for item, i in G.T.iterrows()])} for G in group]
+    elif TAG == 'COPULA_RHO':
+        distros = [{A:B for A, B in zip(name if Z_CUTS else name,\
+            [i.values.ravel().__getitem__(0) for item, i in G.iterrows()])} for G in group]
+    else:
+        distros = [{A:B for A, B in zip(name,
+            [eval(f"stats.{item.split('+').__getitem__(-1)}"\
+                  # f"({','.join( i.astype('str').values.ravel() )})")\
+                  f"({','.join( i.dropna().astype('str').values.ravel() )})")\
+                  for item, i in G.iterrows()] )} for G in group]
 
-#     return distros
+    return distros
 
 
-# #~ RETRIEVE THE PDFs & EVALUATE THEIR 'CONSISTENCY' AGAINST #SEASONS ~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def CHECK_PDF():
-# # https://stackoverflow.com/a/10852003/5885810
-# # https://stackoverflow.com/q/423379/5885810    (global variables)
-#     global DATIME, DOYEAR, COPULA, TOTALP, RADIUS, BETPAR, MAXINT, AVGDUR#, Z_CUTS
+#~ RETRIEVE THE PDFs & EVALUATE THEIR 'CONSISTENCY' AGAINST #SEASONS ~~~~~~~~~~#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+def CHECK_PDF():
+# https://stackoverflow.com/a/10852003/5885810
+# https://stackoverflow.com/q/423379/5885810    (global variables)
+    global DATIME, DOYEAR, COPULA, TOTALP, RADIUS, BETPAR, MAXINT, AVGDUR#, Z_CUTS
 
-#     try:
-#         DATIME = RETRIEVE_PDF( 'DATIME_VMF' )
-#     except IndexError:
-#         # DATIME = [stats.uniform() for x in range(SEASONS)]
-#         DATIME = [None for x in range(SEASONS)]
-#         warnings.warn(f'\nNo DATIME_VMF parameters were found in "{PRE_FILE}".'\
-#             '\nSTORM2.0 will proceed with TOD (Times Of Day) sampled from a '\
-#             'UNIFORM distribution. If this is not what you want, please '\
-#             'accordingly update the aforementioned file.', stacklevel=2)
+    try:
+        DATIME = RETRIEVE_PDF( 'DATIME_VMF' )
+    except IndexError:
+        # DATIME = [stats.uniform() for x in range(SEASONS)]
+        DATIME = [None for x in range(SEASONS)]
+        warnings.warn(f'\nNo DATIME_VMF parameters were found in "{PRE_FILE}".'\
+            '\nSTORM3.0 will proceed with TOD (Times Of Day) sampled from a '\
+            'UNIFORM distribution. If this is not what you want, please '\
+            'accordingly update the aforementioned file.', stacklevel=2)
 
-#     try:
-#         DOYEAR = RETRIEVE_PDF( 'DOYEAR_VMF' )
-#     except IndexError:
-#         DOYEAR = RETRIEVE_PDF( 'DOYEAR_PMF' )
+    try:
+        DOYEAR = RETRIEVE_PDF( 'DOYEAR_VMF' )
+    except IndexError:
+        DOYEAR = RETRIEVE_PDF( 'DOYEAR_PMF' )
 
-#     TOTALP = RETRIEVE_PDF( 'TOTALP_PDF' )
-#     RADIUS = RETRIEVE_PDF( 'RADIUS_PDF' )
-#     BETPAR = RETRIEVE_PDF( 'BETPAR_PDF' )
-#     MAXINT = RETRIEVE_PDF( 'MAXINT_PDF' )
-#     AVGDUR = RETRIEVE_PDF( 'AVGDUR_PDF' )
-#     COPULA = RETRIEVE_PDF( 'COPULA_RHO' )
+    TOTALP = RETRIEVE_PDF( 'TOTALP_PDF' )
+    RADIUS = RETRIEVE_PDF( 'RADIUS_PDF' )
+    BETPAR = RETRIEVE_PDF( 'BETPAR_PDF' )
+    MAXINT = RETRIEVE_PDF( 'MAXINT_PDF' )
+    AVGDUR = RETRIEVE_PDF( 'AVGDUR_PDF' )
+    COPULA = RETRIEVE_PDF( 'COPULA_RHO' )
 
-# # evaluate consistency between lists (lengths must be consistent with #SEASONS)
-#     test = ['DATIME', 'DOYEAR', 'COPULA', 'TOTALP', 'RADIUS', 'BETPAR', 'MAXINT', 'AVGDUR']
-#     lens = list(map(len, list(map( eval, test )) ))
-# # is there are variables having more PDFs than others
-#     assert len(np.unique(lens)) == 1, 'There are less (defined) PDFs for '\
-#         f'{" & ".join(np.asarray(test)[np.where(lens==np.unique(lens).__getitem__(0)).__getitem__(0)])} than for '\
-#         f'{" & ".join(np.delete(np.asarray(test),np.where(lens==np.unique(lens).__getitem__(0)).__getitem__(0)))}.'\
-#         f'\nPlease modify the file "{PRE_FILE}" (accordingly) to ensure that '\
-#         'for each of the aforementioned variables exists at least as many PDFs '\
-#         f'as the number of SEASONS to model ({SEASONS} seasons per year, '\
-#         'according to your input).'
-# # if there are more PDFs than the number of seasons (which is not wrong at all)
-#     if np.unique(lens) > SEASONS:
-#         warnings.warn(f'\nThe file "{PRE_FILE}" contains parameters for '\
-#             f'{np.unique(lens).__getitem__(0)} season(s) but you chose to model'\
-#             f' {SEASONS} season(s) per year.\nSTORM2.0 will proceed using '\
-#             "PDF-parameters for the season with the lowest 'ID-IndeX' (e.g., "\
-#             "'TOTALP_PDF1+...', 'RADIUS_PDF1+...', and so forth.)", stacklevel=2)
-# # if there are more number of seasons than PDFs (STORM duplicates PDFs)
-#     if np.unique(lens) < SEASONS:
-# # https://stackoverflow.com/a/45903502/5885810  (replicate list elements)
-# # https://stackoverflow.com/a/5599313/5885810   (using exec instead of eval)
-#         for x in test:
-#             exec( f'{x} = {x}*{SEASONS}' )
-#         warnings.warn(f'\nThe file "{PRE_FILE}" contains parameters for '\
-#             f'{np.unique(lens).__getitem__(0)} season(s) but you chose to model'\
-#             f' {SEASONS} season(s) per year.\nSTORM2.0 will proceed using these'\
-#             ' parameters for all seasons. If this is not what you want, please'\
-#             ' update the aforementioned file accordingly.', stacklevel=2)
+# evaluate consistency between lists (lengths must be consistent with #SEASONS)
+    test = ['DATIME', 'DOYEAR', 'COPULA', 'TOTALP', 'RADIUS', 'BETPAR', 'MAXINT', 'AVGDUR']
+    lens = list(map(len, list(map( eval, test )) ))
+# is there are variables having more PDFs than others
+    assert len(np.unique(lens)) == 1, 'There are less (defined) PDFs for '\
+        f'{" & ".join(np.asarray(test)[np.where(lens==np.unique(lens).__getitem__(0)).__getitem__(0)])} than for '\
+        f'{" & ".join(np.delete(np.asarray(test),np.where(lens==np.unique(lens).__getitem__(0)).__getitem__(0)))}.'\
+        f'\nPlease modify the file "{PRE_FILE}" (accordingly) to ensure that '\
+        'for each of the aforementioned variables exists at least as many PDFs '\
+        f'as the number of SEASONS to model ({SEASONS} seasons per year, '\
+        'according to your input).'
+# if there are more PDFs than the number of seasons (which is not wrong at all)
+    if np.unique(lens) > SEASONS:
+        warnings.warn(f'\nThe file "{PRE_FILE}" contains parameters for '\
+            f'{np.unique(lens).__getitem__(0)} season(s) but you chose to model'\
+            f' {SEASONS} season(s) per year.\nSTORM3.0 will proceed using '\
+            "PDF-parameters for the season with the lowest 'ID-IndeX' (e.g., "\
+            "'TOTALP_PDF1+...', 'RADIUS_PDF1+...', and so forth.)", stacklevel=2)
+# if there are more number of seasons than PDFs (STORM duplicates PDFs)
+    if np.unique(lens) < SEASONS:
+# https://stackoverflow.com/a/45903502/5885810  (replicate list elements)
+# https://stackoverflow.com/a/5599313/5885810   (using exec instead of eval)
+        for x in test:
+            exec( f'{x} = {x}*{SEASONS}' )
+        warnings.warn(f'\nThe file "{PRE_FILE}" contains parameters for '\
+            f'{np.unique(lens).__getitem__(0)} season(s) but you chose to model'\
+            f' {SEASONS} season(s) per year.\nSTORM3.0 will proceed using these'\
+            ' parameters for all seasons. If this is not what you want, please'\
+            ' update the aforementioned file accordingly.', stacklevel=2)
 
 
 #~ TOY PDFS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def READ_PDF_PAR():
-    PDFS = 'table in "ProbabilityDensityFunctions_TWO--ANALOG-py.csv"'
-
-
-def CHECK_PDF():
+def ALT_CHECK_PDF():
     global DATIME, DOYEAR, COPULA, TOTALP, RADIUS, BETPAR, MAXINT, AVGDUR, WINDIR, WSPEED
 
     TOTALP = [{'':stats.gumbel_l(5.5116, 0.2262)}, {'':stats.norm(5.3629, 0.3167)}]
@@ -921,8 +956,7 @@ You can remove the warning by following (e.g.):
     # import matplotlib.pyplot as plt
     # import cartopy.crs as ccrs
     # fig = plt.figure(figsize=(10,10), dpi=300)
-    # # ax = plt.axes(projection=ccrs.epsg(EPSG_CODE))
-    # # # the above EPSG_CODE doesn't work for HAD!
+    # # ax = plt.axes(projection=ccrs.epsg(42106)) # this EPSG code doesn't officially exist!
     # ax = plt.axes( )
     # ax.set_aspect(aspect='equal')
     # for spine in ax.spines.values(): spine.set_edgecolor(None)
@@ -993,7 +1027,7 @@ If you're doing "CIRCULAR" for DOY that means you did install "vonMisesMixtures"
 # SECONDS since DATE_ORIGIN
 # https://stackoverflow.com/a/50062101/5885810
     stamps = np.asarray( list(map(lambda d,t:
-        (d + timedelta(hours=t) - DATE_ORIGIN).total_seconds(),
+        (d + timedelta(hours=t) - DATE_ORIGEN).total_seconds(),
         all_dates.dt.tz_localize( TIME_ZONE ), times)) )
 # # pasting and formatting
 # # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
@@ -1085,7 +1119,7 @@ then there's no point in using circular on TOD, is it?'
 # https://stackoverflow.com/a/50062101/5885810
 # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
     stamps = np.asarray( list(map(lambda d,t:
-        ((d + timedelta(hours=t)) - DATE_ORIGIN).total_seconds(),
+        ((d + timedelta(hours=t)) - DATE_ORIGEN).total_seconds(),
         all_dates.dt.tz_localize(TIME_ZONE), times)) )
 # # pasting and formatting
 # # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
@@ -1154,41 +1188,13 @@ def LOTR( RADII, MAX_I, DUR_S, BETAS, CENTS ):
     return rain_ring
 
 
-# #~ RASTERIZE SHPs & INTERPOLATE RAINFALL (between rings) ~~~~~~~~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def RASTERIZE( ALL_RINGS, OUTER_RING ):# posx=23; ALL_RINGS=RINGS[posx]; OUTER_RING=RINGO[posx]
-# # burn the ALL_RINGS
-#     tmp = gdal.Rasterize('', ALL_RINGS.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
-#         attribute='rain', noData=0, outputType=gdal.GDT_Float64, targetAlignedPixels=True,
-#         # outputBounds=[llim, blim, rlim, tlim], outputSRS=f'EPSG:{WGEPSG}', format='MEM')
-#         outputBounds=[llim, blim, rlim, tlim], outputSRS=f'{PROJ4_STR}', format='MEM')
-#         #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
-#     fall = tmp.ReadAsArray()
-#     tmp = None
-#     #gdal.Unlink('the_tmpfile.tif')
-# # burn the mask
-#     tmp = gdal.Rasterize('', OUTER_RING.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
-#         burnValues=1, noData=0, outputType=gdal.GDT_Int16, targetAlignedPixels=True,
-#         # outputBounds=[llim, blim, rlim, tlim], outputSRS=f'EPSG:{WGEPSG}', format='MEM')
-#         outputBounds=[llim, blim, rlim, tlim], outputSRS=f'{PROJ4_STR}', format='MEM')
-#         #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
-#     mask = tmp.ReadAsArray()
-#     tmp = None
-# # re-touching the mask...to do a proper interpolation
-#     mask[np.where(fall!=0)] = 0
-# # everything that is 1 is interpolated
-#     fill.fillnodata(np.ma.array(fall, mask=mask), mask=None, max_search_distance=4.0, smoothing_iterations=2)
-#     return fall
-
-
 #~ RASTERIZE SHPs & INTERPOLATE RAINFALL (between rings) ~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def RASTERIZE( ALL_RINGS ):# posx=23; ALL_RINGS=RINGS[posx]
 # burn the ALL_RINGS
     tmp = gdal.Rasterize('', ALL_RINGS.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
         attribute='rain', noData=0, outputType=gdal.GDT_Float64, targetAlignedPixels=True,
-        # outputBounds=[llim, blim, rlim, tlim], outputSRS=f'EPSG:{WGEPSG}', format='MEM')
-        outputBounds=[llim, blim, rlim, tlim], outputSRS=f'{PROJ4_STR}', format='MEM')
+        outputBounds=[llim, blim, rlim, tlim], outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4(), format='MEM')
         #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
     fall = tmp.ReadAsArray()
     tmp = None
@@ -1202,8 +1208,7 @@ def RASTERIZE( ALL_RINGS ):# posx=23; ALL_RINGS=RINGS[posx]
     tmp = gdal.Rasterize('',
         gpd.GeoSeries([ OUTER_RING ]).to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
         burnValues=1, noData=0, outputType=gdal.GDT_Int16, targetAlignedPixels=True,
-        # outputBounds=[llim, blim, rlim, tlim], outputSRS=f'EPSG:{WGEPSG}', format='MEM')
-        outputBounds=[llim, blim, rlim, tlim], outputSRS=f'{PROJ4_STR}', format='MEM')
+        outputBounds=[llim, blim, rlim, tlim], outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4(), format='MEM')
         #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
     mask = tmp.ReadAsArray()
     tmp = None
@@ -1220,7 +1225,7 @@ def ZTRATIFICATION( Z_OUT ):
     # global qants, ztats
     if Z_CUTS:
 # calculate zonal statistics
-        # test = zonal_stats(SHP_FILE, './data_WG/dem/WGdem_wgs84.tif', stats='count min mean max median')
+        # test = zonal_stats(abspath( join(parent_d, SHP_FILE) ), './data_WG/dem/WGdem_wgs84.tif', stats='count min mean max median')
         # IF YOUR DEM IS IN WGS84... RE-PROJECT THE POLYGONS TO 4326 (WGS84)
         ztats = zonal_stats(vectors=Z_OUT.to_crs(epsg=4326).geometry, raster=DEM_FILE, stats=Z_STAT)
         # # OTHERWISE, A FASTER APPROACH IS HAVING THE DEM/RASTER IN THE LOCAL CRS
@@ -1236,7 +1241,8 @@ def ZTRATIFICATION( Z_OUT ):
         qants = ztats.groupby(by='E').count().reset_index(level=0)
     else:
 # https://stackoverflow.com/a/17840195/5885810  (1-row pandas)
-        qants = pd.DataFrame( {'E':'', 'median':len(Z_OUT)}, index=[0] )
+        # qants = pd.DataFrame( {'E':'', 'median':len(Z_OUT)}, index=[0] )
+        qants = pd.DataFrame( {'E':'', Z_STAT:len(Z_OUT)}, index=[0] )
         # ztats = pd.DataFrame( {'E':np.repeat('',len(Z_OUT))} )
         ztats = pd.Series( range(len(Z_OUT)) )      # 5x-FASTER! than the line above
     return qants, ztats
@@ -1250,21 +1256,15 @@ def ZTRATIFICATION( Z_OUT ):
 #- MISCELLANEOUS TO TIME-DISCRETIZATION ------------------------------ (START) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-# #~ ROUND TIME.STAMPS to the NEAREST 'T_RES' ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def BASE_ROUND( stamps, base= T_RES):
-# # https://stackoverflow.com/a/2272174/5885810
-# # "*60" because STAMPS come in seconds; and T_RES is in minutes
-#     base = base *TIME_DICT_[ TIME_OUTNC ] *60
-#     return (base *(stamps /base).round()).astype( TIMEINT )
-
-#~ ROUND TIME.STAMPS to the 'T_RES' FLOOR! ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#~ ROUND TIME.STAMPS to the 'T_RES' FLOOR! (or NEAREST 'T_RES') ~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def BASE_ROUND( stamps, base= T_RES):
 # https://stackoverflow.com/a/2272174/5885810
 # "*60" because STAMPS come in seconds; and T_RES is in minutes
     base = base *TIME_DICT_[ TIME_OUTNC ] *60
     iround = (base *(np.ceil(stamps /base) -1))#.astype( TIMEINT )
+# # activate line below if you want to the NEAREST 'T_RES' (instead of FLOOR)
+#     iround = (base *(stamps /base).round())#.astype( TIMEINT )
     return iround
 
 
@@ -1561,23 +1561,6 @@ if the objective is REACHING the (granular) MEDIAN; something else has to be tho
     # plt.imshow(CATCHMENT_MASK, interpolation='none', aspect='equal', origin='upper',
     #             cmap='gist_ncar_r', extent=(llim, rlim, blim, tlim))
 
-
-# #~ CREATE A LOCAL-PROJECTED.VOID rio.XARRAY ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def EMPTY_MAP2():
-#     # void numpy
-#     void = np.empty( (len(YS),len(XS)) )
-#     void.fill(np.nan)
-#     # create xarray
-#     xr_void = xr.DataArray(data=void, dims=['y', 'x'],
-#         coords=dict(y=(['y'], YS), x=(['x'], XS), ),
-#         attrs=dict(_FillValue=np.nan, units='mm', ),
-#         )
-#     # assign CRS
-#     xr_void.rio.write_crs(rio.crs.CRS( WKT_OGC ),
-#                           grid_mapping_name='spatial_ref', inplace=True)
-#     return xr_void
-
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- EXTRA-CHUNK OF MISCELLANEOUS FUNCTIONS ------------------------------ (END) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -1739,16 +1722,6 @@ OUT ALL THIS SECTION & ACTIVATE THE SECTION "- WGS84.CRS (netcdf definition) -"
     # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates [start]
     grid._CoordinateTransformType = 'Projection'
     grid._CoordinateAxisTypes = 'GeoY GeoX'
-# # i'm choosing not to include either ESPG:CODE as not all codes are out-there
-# # ... or PROJ4:PARAMS as that convention is becoming now obsolete (apparently).
-#     # grid.EPSG_code = f'EPSG:{WGEPSG}'                             # "EPSG:42106"
-#     grid.EPSG_code = f'EPSG:{42106}'                                # this code/number is NOT SUPPORTED!!
-# # '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
-#     # grid.proj4_params = pp.CRS.from_epsg(WGEPSG).to_proj4()
-#     grid.proj4_params = pp.CRS.from_wkt(WKT_OGC).to_proj4()
-# # ['+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'] -> (from ISRIC)
-    # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~ [end]
-    # grid.unit = 'm'                                                 # absolutely innecessary
 
     # # STORING LOCAL COORDINATES
     yy = sub_grp.createVariable('projection_y_coordinate', 'i4', dimensions=('y')
@@ -1795,17 +1768,9 @@ OUT ALL THIS SECTION & ACTIVATE THE SECTION "- WGS84.CRS (netcdf definition) -"
 #     # ~~~ RIO.XARRAY defaults for WGS84 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ [end]
 #     # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates [start]
 #     grid._CoordinateAxisTypes = 'Lat Lon'
-# # # i'm choosing not to include either ESPG:CODE as not all codes are out-there
-# # # ... or PROJ4:PARAMS as that convention is becoming now obsolete (apparently).
-# #     grid.EPSG_code = 'EPSG:4326'
-# #     grid.proj4_params = pp.CRS('EPSG:4326').to_proj4()
-# #     # grid.proj4_params = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'  # ADAGUC extension
-#     # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~ [end]
 
 #     # STORING WGS84 COORDINATES
-#     # lat, lon = pp.Transformer.from_crs(f'EPSG:{WGEPSG}','EPSG:4326').transform(
-#     # # in case (as it's here) the EPSG.CODE dosen't work, try PROJ4
-#     lat, lon = pp.Transformer.from_proj(PROJ4_STR,'EPSG:4326').transform(
+#     lat, lon = pp.Transformer.from_proj(pp.CRS.from_wkt(WKT_OGC).to_proj4(),'EPSG:4326').transform(
 #         np.meshgrid(XS,YS).__getitem__(0), np.meshgrid(XS,YS).__getitem__(-1),
 #         zz=None, radians=False)
 #     # https://pyproj4.github.io/pyproj/stable/gotchas.html#upgrading-to-pyproj-2-from-pyproj-1
@@ -1883,8 +1848,8 @@ def NC_FILE_II( simy ):#, XTRA1, XTRA2 ):
     # timexx = sub_grp.createVariable(nctnam, 'u8', (nctnam))#, chunksizes=chunkt)
     # timexx[:] = KATE
     timexx.long_name = 'starting time'
-    # timexx.units = f'{TIME_OUTNC} since ' + DATE_ORIGIN.strftime('%Y-%m-%d %H:%M:%S')#'%Y-%m-%d %H:%M:%S %Z%z'
-    timexx.units = f"{TIME_OUTNC} since {DATE_ORIGIN.strftime('%Y-%m-%d %H:%M:%S')}"
+    # timexx.units = f'{TIME_OUTNC} since ' + DATE_ORIGEN.strftime('%Y-%m-%d %H:%M:%S')#'%Y-%m-%d %H:%M:%S %Z%z'
+    timexx.units = f"{TIME_OUTNC} since {DATE_ORIGEN.strftime('%Y-%m-%d %H:%M:%S')}"
     timexx.calendar = 'proleptic_gregorian'#'gregorian'#
     timexx._CoordinateAxisType = 'Time'
     timexx.coordinates = nctnam
@@ -2244,15 +2209,6 @@ SOLO_UNO is never gonna be SMALLER THAN -> NEW_DATE; NEW_DATE accounts for the i
     # # # 1.22 s ± 106 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
 
 #%%
-"""
-NUMPY or XARRAY
----------------
-now the exercise is done via NUMPY... but concatenating the
-ever increased-in-size of arrays is burdening the memory.
-XARRAY would also have to concatenate and GROUPBY by common
-dates/timestamps... so potentially will equally hurt memory.
-"""
-
 
 #~ "THE" LOOP CALLING THE FUNCTIONS (until CUMSUM.is.REACHED) ~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -2297,7 +2253,8 @@ def COMPUTE_LOOP( MASK_SHP, NP_MASK, MRAIN, seas, simy, nreg, MOTHER ):
         qants, ztats = ZTRATIFICATION( pd.concat( RINGO ) )
     # compute copulas given the Z_bands (or not)
         MAX_I, DUR_S = list(map(np.concatenate, zip(* qants.apply( lambda x:\
-            COPULA_SAMPLING(COPULA, seas, x['E'], x['median']), axis='columns') ) ))
+            # COPULA_SAMPLING(COPULA, seas, x['E'], x['median']), axis='columns') ) ))
+            COPULA_SAMPLING(COPULA, seas, x['E'], x[ Z_STAT ]), axis='columns') ) ))
 # REVISE! if the sorting is indeed NECESSARY!!
     # sort back the arrays
         MAX_I, DUR_S = list(map( lambda A: A[ np.argsort( ztats.index ) ], [MAX_I, DUR_S] ))
@@ -2370,14 +2327,15 @@ def COMPUTE_LOOP( MASK_SHP, NP_MASK, MRAIN, seas, simy, nreg, MOTHER ):
 #~ CENTRAL WRAPPER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def STORM( NC_NAMES ):
-    global cut_lab, cut_bin, tod_fun, nc, sub_grp, nsim, REGIONS#, i_scaling
+    global cut_lab, cut_bin, tod_fun, nc, sub_grp, nsim, REGIONS
 # define Z_CUTS labelling (if necessary)
     if Z_CUTS:
         cut_lab = [f'Z{x+1}' for x in range(len(Z_CUTS) +1)]
         cut_bin = np.union1d(Z_CUTS, [0, 9999])
 # read (and check) the PDF-parameters
     READ_PDF_PAR()
-    CHECK_PDF()
+    # CHECK_PDF()
+    ALT_CHECK_PDF()
 # define some xtra-basics
     WET_SEASON_DAYS()
     SHP_REGION()
@@ -2417,7 +2375,7 @@ def STORM( NC_NAMES ):
             # 2ND FILL OF THE NC.FILE (creating the TIME & RAIN vars)
                 NC_FILE_II( simy )
 
-                rain_fs = READ_REALIZATION( RAIN_MAP, SUBGROUP, YS, XS, WKT_OGC )
+                rain_fs = READ_REALIZATION( RAIN_MAP, SUBGROUP, WKT_OGC, YS, XS )
                 REGIONS = REGIONALISATION( rain_fs, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK )
                 # REGIONS = REGIONALISATION( rain_fs.rain, CLUSTERS, BUFFRX_MASK, CATCHMENT_MASK, rain_fs.void )
 
@@ -2444,30 +2402,30 @@ def STORM( NC_NAMES ):
                 # # https://stackoverflow.com/a/65990898/5885810
                 # list(map(COMPUTE_LOOP, *REGIONS.values()))
                 for nreg in tqdm( range( CLUSTERS ), ncols=50 ):# nreg=0 nreg=1 nreg=2 nreg=3
-                    newmom, cumout = COMPUTE_LOOP(REGIONS['mask'][nreg], REGIONS['npma'][nreg],
-                        REGIONS['rain'][nreg], seas, simy, nreg, allTIME)
+                    newmom, cumout = COMPUTE_LOOP( REGIONS['mask'][nreg], REGIONS['npma'][nreg],
+                        REGIONS['rain'][nreg], seas, simy, nreg, allTIME )
                     allTIME = newmom
                     # allTIME = NEWMOM
                     cum_OUT.append( cumout )
 
-    # storing MEANs as INTs
-        cum_xtra = []
-        for rr in range(len(REGIONS['npma'])):
-            sumas = ((ncvarx[:].data *SCL) +ADD).round(3).astype('f8').sum(axis=0)
-            # sumas = ncvarx[:].data.astype('f8').sum(axis=0)
-            cum_xtra.append( np.ma.array(sumas, mask=~REGIONS["npma"][rr].astype("bool")).mean() )
+            # storing MEANs as INTs
+                cum_xtra = []
+                for rr in range(len(REGIONS['npma'])):
+                    sumas = ((ncvarx[:].data *SCL) +ADD).round(3).astype('f8').sum(axis=0)
+                    # sumas = ncvarx[:].data.astype('f8').sum(axis=0)
+                    cum_xtra.append( np.ma.array(sumas, mask=~REGIONS["npma"][rr].astype("bool")).mean() )
 
-        if RAINFMT[0]!='f':
-        # you'd have PROBLEMS.IF doing this assignation BEFORE filling entirely the NCVARX.var
-            ncvarx.scale_factor = SCL
-            ncvarx.add_offset = ADD
+                if RAINFMT[0]!='f':
+                # you'd have PROBLEMS.IF doing this assignation BEFORE filling entirely the NCVARX.var
+                    ncvarx.scale_factor = SCL
+                    ncvarx.add_offset = ADD
 
-    # just to fill "maskxx" only once (we don't need re-regionalisation every run, do we?)
-        maskxx[:] = REGIONS['kmeans']
-    # temporal xport of kmeans+regions
-        pd.DataFrame({'k':range(CLUSTERS), 'mean_in':REGIONS['rain'], 'mean_out':cum_OUT
-                      ,'mean_xtra':cum_xtra
-            }).to_csv(ncid.replace('.nc','_kmeans.csv'), index=False, mode='w', sep=',')
+            # just to fill "maskxx" only once (we don't need re-regionalisation every run, do we?)
+                maskxx[:] = REGIONS['kmeans']
+            # temporal xport of kmeans+regions
+                pd.DataFrame({'k':range(CLUSTERS), 'mean_in':REGIONS['rain'], 'mean_out':cum_OUT
+                              ,'mean_xtra':cum_xtra
+                    }).to_csv(ncid.replace('.nc','_kmeans.csv'), index=False, mode='a', sep=',')
 
         nc.close()
 
@@ -2480,13 +2438,13 @@ def STORM( NC_NAMES ):
 if __name__ == '__main__':
 
     from pathlib import Path
-    Path( OUT_PATH ).mkdir(parents=True, exist_ok=True)
+    Path( abspath( join(parent_d, OUT_PATH) ) ).mkdir(parents=True, exist_ok=True)
     # define NC.output file.names
-    NC_NAMES =  list(map( lambda a,b,c: f'{OUT_PATH}/RUN_'\
+    NC_NAMES =  list(map( lambda a,b,c: f'{abspath( join(parent_d, OUT_PATH) )}/RUN_'\
         f'{datetime.now(tzlocal()).strftime("%y%m%dT%H%M")}_S{a+1}_{b.strip()}_{c.strip()}.nc',\
         # range(SEASONS), PTOT_SCENARIO, STORMINESS_SCENARIO ))
         range(SEASONS), ['nada','zero'], ['zero','nada'] ))
 
     STORM( NC_NAMES )
     # # testing for only ONE Season!
-    # STORM( [f'./model_output/RUN_test-two.nc'] )
+    # STORM( [f'./model_output/RUN_test-XX.nc'] )

@@ -9,11 +9,14 @@ To run this script type:
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def READ():
     import argparse
+# # maybe just..
+#     from parse_input import PARCE
     import parse_input
     global argsup
     parser = argparse.ArgumentParser(description = 'STOchastic Rainstorm Model [STORM v3.0]')
 # updated args
     argsup = parse_input.PARCE( parser )
+    # argsup = PARCE( parser )
     # print( argsup )
 
 
