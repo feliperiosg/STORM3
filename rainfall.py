@@ -744,17 +744,18 @@ def ALT_CHECK_PDF():
     TOTALP = [{'':stats.gumbel_l(5.5116, 0.2262)}, {'':stats.norm(5.3629, 0.3167)}]
     RADIUS = [{'':stats.johnsonsb(1.5187, 1.2696, -0.2789, 20.7977)}, {'':stats.gamma(4.3996, -0.475, 1.399)}]
     BETPAR = [{'':stats.exponnorm(8.2872, 0.0178 ,0.01)}, {'':stats.burr(2.3512, 0.85, -0.0011, 0.0837)}]
-    MAXINT = [{'':stats.expon(0.1057 ,6.9955)}, {'':stats.expon(0.1057 ,6.9955)}]
+    MAXINT = [{'':stats.expon(0.1057 ,6.9955)}] *2
     # [{'Z1': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca438a850>,
     #   'Z2': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca43257c0>,
     #   'Z3': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca4395be0>},
     #  {'Z1': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca438ec10>,
     #   'Z2': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca4325f40>,
     #   'Z3': <scipy.stats._distn_infrastructure.rv_continuous_frozen at 0x1cca438e3d0>}]
-    AVGDUR = [{'':stats.geninvgauss(-0.089, 0.77, 2.8432, 82.0786)}, {'':stats.geninvgauss(-0.089, 0.77, 2.8432, 82.0786)}]
-    COPULA = [{'':-0.31622}, {'':-0.31622}]
-    # [{'Z1': -0.2764573348234358, 'Z2': -0.31246435519305843, 'Z3': -0.44038940293798295},
-    #  {'Z1': -0.2764573348234358, 'Z2': -0.31246435519305843, 'Z3': -0.44038940293798295}]
+    AVGDUR = [{'':stats.geninvgauss(-0.089, 0.77, 2.8432, 82.0786)}] *2
+    # COPULA = [{'':-0.31622}, {'':-0.31622}]
+    # # [{'Z1': -0.2764573348234358, 'Z2': -0.31246435519305843, 'Z3': -0.44038940293798295},
+    # #  {'Z1': -0.2764573348234358, 'Z2': -0.31246435519305843, 'Z3': -0.44038940293798295}]
+    COPULA = [{'':-0.31622, 'Z1':-0.276457, 'Z2':-0.312464, 'Z3':-0.44}] *2
     DATIME = [{'p': np.r_[0.2470, 0.3315, 0.4215], 'mus': np.r_[0.6893, 1.7034, 2.5756],
                'kappas': np.r_[6.418, 3., 0.464]},
               {'p': np.r_[1.], 'mus': np.r_[1.444], 'kappas': np.r_[1.0543]}]
@@ -767,7 +768,7 @@ def ALT_CHECK_PDF():
               {'p': np.r_[1.], 'mus': np.r_[np.pi *.1], 'kappas': np.r_[0.00001]}]
 # until you parameterize WIN.DIRECTION use scypi's VONMISES [it's ~100x faster than VMM-package!]
     WINDIR = [{'':stats.vonmises(.9 *np.pi, .00001)}, {'':stats.vonmises(.1 *np.pi, .00001)}]
-    WSPEED = [{'':stats.norm(7.55, 1.9)}, {'':stats.norm(7.55, 1.9)}]
+    WSPEED = [{'':stats.norm(7.55, 1.9)}] *2
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- CONSTRUCT THE PDFs (TO SAMPLE FROM) --------------------------------- (END) #
@@ -1148,7 +1149,6 @@ def LAST_RING( all_radii, CENTS ):#, MINRADIUS ):# all_radii=RADII
             # resolution=int((3 if r < 1 else 2)**np.ceil(r /2)) ),
             # resolution=np.ceil(r /MINRADIUS) +1 ), # or maybe... "+1"??
             resolution=np.ceil(r /MINRADIUS) +2 ), # or maybe... "+2"??
-        # crs=f'EPSG:{WGEPSG}'), CENTS, all_radii))
         crs=WKT_OGC), CENTS, all_radii))
     return ring_last
 
@@ -1178,7 +1178,6 @@ def LOTR( RADII, MAX_I, DUR_S, BETAS, CENTS ):
             # resolution=int((3 if r < 1 else 2)**np.ceil(r /2)) ).boundary},
             # resolution=np.ceil(r /MINRADIUS) +1 ).boundary}, # or maybe... "+1"??
             resolution=np.ceil(r /MINRADIUS) +2 ).boundary}, # or maybe... "+2"??
-        # crs=f'EPSG:{WGEPSG}') , r, p)) ), CENTS, all_radii, all_rain))
         crs=WKT_OGC) , r, p)) ), CENTS, all_radii, all_rain))
 # # the above approach (in theory) is much? faster than the list.comprehension below
 #     rain_ring = [pd.concat( gpd.GeoDataFrame({'rain':p, 'geometry':gpd.points_from_xy(
@@ -1225,12 +1224,15 @@ def ZTRATIFICATION( Z_OUT ):
     # global qants, ztats
     if Z_CUTS:
 # calculate zonal statistics
-        # test = zonal_stats(abspath( join(parent_d, SHP_FILE) ), './data_WG/dem/WGdem_wgs84.tif', stats='count min mean max median')
+        # test = zonal_stats(abspath( join(parent_d, SHP_FILE) ),
+        #     './data_WG/dem/WGdem_wgs84.tif', stats='count min mean max median')#??
         # IF YOUR DEM IS IN WGS84... RE-PROJECT THE POLYGONS TO 4326 (WGS84)
-        ztats = zonal_stats(vectors=Z_OUT.to_crs(epsg=4326).geometry, raster=DEM_FILE, stats=Z_STAT)
+        ztats = zonal_stats(vectors=Z_OUT.to_crs(epsg=4326).geometry,
+            raster=abspath( join(parent_d, DEM_FILE) ), stats=Z_STAT)
         # # OTHERWISE, A FASTER APPROACH IS HAVING THE DEM/RASTER IN THE LOCAL CRS
         # # ...i.e., DEM_FILE=='./data_WG/dem/WGdem_26912.tif'
-        # ztats = zonal_stats(vectors=Z_OUT.geometry, raster=DEM_FILE, stats=Z_STAT)
+        # ztats = zonal_stats(vectors=Z_OUT.geometry,
+        #     raster=abspath( join(parent_d, DEM_FILE) ), stats=Z_STAT)
 # to pandas
         ztats = pd.DataFrame( ztats )
 # column 'E' classifies all Z's according to the CUTS
@@ -1258,7 +1260,7 @@ def ZTRATIFICATION( Z_OUT ):
 
 #~ ROUND TIME.STAMPS to the 'T_RES' FLOOR! (or NEAREST 'T_RES') ~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def BASE_ROUND( stamps, base= T_RES):
+def BASE_ROUND( stamps, base= T_RES ):
 # https://stackoverflow.com/a/2272174/5885810
 # "*60" because STAMPS come in seconds; and T_RES is in minutes
     base = base *TIME_DICT_[ TIME_OUTNC ] *60
@@ -1309,24 +1311,10 @@ def QUANTIZE_TIME( NUM_S, seas, simy, durations ):# durations=DUR_S[ okdur ]
 # xploding of discrete timestamps (per storm.cluster)
     MATES = np.concatenate( list(map(lambda r_s,i_s:
         # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
-        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60)*len(i_s), step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
+        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
+                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
         RATES, i_scaling)) ).astype( TIMEINT )
     return MATES, i_scaling
-
-
-# #~ ONE 1ST APPROACH USED TO DISCRETIZE TIME [NOT USED ANYMORE!] ~~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def SPACETIME( S_M, i_s, r_s ):# S_M=STORM_MATRIX[23]; i_s=i_scaling[23]; r_s=RATES[23]
-#     # https://stackoverflow.com/a/32171971/5885810  -> replicate a 2D.numpy (along a 3D)
-#     one_s = np.repeat(S_M[np.newaxis, :, :], len(i_s), axis=0)
-#     # np.max(one_s, axis=(1,2))  *i_s
-# # scale.down rainfall intensity into rainfall depths (for a given T_RES)
-#     # https://stackoverflow.com/q/14513222/5885810  -> multiply np of diff.dimensions
-#     one_s = one_s * i_s[:, None, None]
-# # convert into Xarray
-#     one_s = xr.DataArray(data=one_s, dims=['time','row','col'])
-#     one_s.coords['time'] = np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES).astype('u8')
-#     return one_s
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- MISCELLANEOUS TO TIME-DISCRETIZATION -------------------------------- (END) #
@@ -1336,16 +1324,6 @@ def QUANTIZE_TIME( NUM_S, seas, simy, durations ):# durations=DUR_S[ okdur ]
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- EXTRA-CHUNK OF MISCELLANEOUS FUNCTIONS ---------------------------- (START) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-# #~ REMOVE (ACCORDINGLY) DURATIONS OUTSIDE [MIN_DUR, MAX_DUR].range ~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def CHOP( DUR_S, DATES, STORM_MATRIX ):
-# # find the indexes outside the limits
-#     outdur = np.concatenate((np.where(DUR_S<MIN_DUR).__getitem__(0) if MIN_DUR else np.empty(0),
-#         np.where(DUR_S>MAX_DUR).__getitem__(0) if MAX_DUR else np.empty(0))).astype('int')
-#     d_bool = ~np.in1d(range(len(STORM_MATRIX)), outdur)
-# # update 'vectors'
-#     return DUR_S[ d_bool ], DATES[ d_bool ], [item for i, item in enumerate(STORM_MATRIX) if d_bool[i]]
 
 #~ INDEX ALL DURATIONS OUTSIDE [MIN_DUR, MAX_DUR].range ~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -1384,8 +1362,8 @@ def MOVING_STORM( XENTS, i_scaling, seas ):# XENTS=CENTS[ okdur ]
 
 # DISPLACE THE STORM_CENTRES
 # there might be VOIDs in 'i_scaling' as we don't need tha last.element
-    # stride = list(map( np.cumsum, list(map(np.multiply, wspeed *1.9, list(map(lambda x:np.r_[0,x[:-1]], i_scaling)) )) ))
     stride = list(map( np.cumsum,
+        # list(map(np.multiply, wspeed *1.9, list(map(lambda x:np.r_[0,x[:-1]], i_scaling)) )) ))
         list(map(np.multiply, wspeed, list(map(lambda x:np.r_[0,x[:-1]], i_scaling)) )) ))
     # deltax = list(map(np.multiply, stride *1000, np.cos(azimut)))
     # deltay = list(map(np.multiply, stride *1000, np.sin(azimut)))
@@ -1669,7 +1647,7 @@ and the conventions between CF & PROJ4 & WKT:
 # http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#appendix-grid-mappings
 # https://spatialreference.org/
 In this case, the PROJ4.string (from the WKT) is:
-    **[pp.CRS.from_wkt(WKT_OGC).to_proj4() or pp.CRS.from_epsg(WGEPSG).to_proj4()]**
+    **[pp.CRS.from_wkt(WKT_OGC).to_proj4() or pp.CRS.from_epsg(EPSG).to_proj4()]**
     '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
 which is very similar to the one provided by ISRIC/andresQuichimbo:
     '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
@@ -2344,7 +2322,7 @@ def STORM( NC_NAMES ):
 
     # # https://gis.stackexchange.com/a/267326/127894     (get EPSG/CRS from raster)
     # from osgeo import osr
-    # tIFF = gdal.Open( DEM_FILE )
+    # tIFF = gdal.Open( abspath( join(parent_d, DEM_FILE) ) )
     # tIFF = gdal.Open( './data_WG/dem/WGdem_WGS84.tif' )
     # tIFF_proj = osr.SpatialReference( wkt=tIFF.GetProjection() ).GetAttrValue('AUTHORITY', 1)
     # tIFF = None

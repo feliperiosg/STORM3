@@ -22,6 +22,8 @@ from numpy import allclose
 import chunking
 
 
+# unitestS start here!
+# --------------------
 def test_BINLIST():
 
     assert allclose(chunking.BINLIST( 2, 3 ), [0, 1, 0])
@@ -53,4 +55,3 @@ if __name__ == '__main__':
     test_BINLIST()
     test_PERTURB_SHAPE()
     test_CHUNK_3D()
-    # print('\n', end='')

@@ -23,6 +23,8 @@ from pandas import DataFrame
 import check_input
 
 
+# unitestS start here!
+# --------------------
 def test_PAR_UPDATE():
 
     n_clus_ = 3
@@ -55,7 +57,7 @@ def test_INFER_SCENARIO():
 
     tab_sign  = DataFrame({'Var1':['', '+', '-']                            ,'Var2':[0, 1,-1   ]})
     tab_ptot  = DataFrame({'Var1':['ptotC', 'ptotS', 'ptotT', 'n/a']        ,'Var2':[0, 1, 2, 3]})
-    # tab_ptot  = DataFrame({'Var1':['ptotC', 'ptotS', 'ptotT', 'special']        ,'Var2':[0, 1, 2, 3]})
+    # tab_ptot  = DataFrame({'Var1':['ptotC', 'ptotS', 'ptotT', 'special']    ,'Var2':[0, 1, 2, 3]})
     tab_storm = DataFrame({'Var1':['stormsC', 'stormsS', 'stormsT', 'n/a']  ,'Var2':[0, 1, 2, 3]})
 
 # calling the function
@@ -78,10 +80,8 @@ def test_WELCOME():
         from os import devnull
 
         sys.stdout = open(devnull, 'w')
-
 # calling the function
         names = check_input.WELCOME()
-
         sys.stdout = sys.__stdout__
 
         assert check_input.OUT_PATH in names.__getitem__(0) and names.__getitem__(0)[-3:] == '.nc'

@@ -32,6 +32,8 @@ real_file = load( abspath( join(curent_d, './realisation.npy') ) )
 void_file = abspath( join(curent_d, './void.nc') )
 
 
+# unitestS start here!
+# --------------------
 def test_EMPTY_MAP():
 
     test_void = open_dataarray(void_file, decode_coords='all')
