@@ -1570,14 +1570,20 @@ def NCBYTES_RAIN():
     MAXIMUM = +(2**( INTEGER *8 )) -1       # -->      65535  (largest unsigned integer of 16 Bits -> 0 also counts)
     # MAXIMUM = +(2**( 32 )) -1             # --> 4294967296  (largest unsigned integer of 32 Bits)
 
+# definie minimum rainfall first
+    iMIN = 0.
+
 # # run your own (customized) tests
 # temp = 3.14159
-# seed = 1133
-# epsn = 0.0020
-# while temp > epsn:
-#     temp = (seed - 0.) / (MAXIMUM - (MINIMUM + 1))
-#     seed = seed - 1
-# print( (f'starting from 0, you\'d need a max. of: {seed+1} to guarantee an epsilon of {epsn}') )
+# seed = 1500
+# # epsn = 0.0020
+# epsilon = [0.003, 0.002, 0.001]
+# for epsn in epsilon:
+#     while temp > epsn:
+#         temp = (seed -iMIN) / (MAXIMUM -MINIMUM -1)
+#         seed = seed - 1
+#     # print(seed)
+#     print( (f'starting from {iMIN}, you\'d need a max. of ~{seed+1} to guarantee an epsilon of {epsn}') )
 # # starting from 0, you'd need a max. of:  65 to guarantee an epsilon of 0.001
 # # starting from 0, you'd need a max. of: 131 to guarantee an epsilon of 0.002
 # # starting from 0, you'd need a max. of: 196 to guarantee an epsilon of 0.003
@@ -1590,24 +1596,24 @@ def NCBYTES_RAIN():
 # NORMALIZING THE RAINFALL SO IT CAN BE STORED AS 16-BIT INTEGER (65,536 -> unsigned)
 # https://stackoverflow.com/a/59193141/5885810      (scaling 'integers')
 # https://stats.stackexchange.com/a/70808/354951    (normalize data 0-1)
-    iMIN = 0.
 # if you want a larger precision (or your variable is in the 'low' scale,
 # ...say Summer Temperatures in Celsius) you must/could lower this limit.
-    iMAX = (MAXIMUM -MINIMUM) *PRECISION
+    iMAX = PRECISION *(MAXIMUM -MINIMUM -1) +iMIN
     # 131.070 -> for MINIMUM==0
     # 131.068 -> for MINIMUM==1
-    SCL = (iMAX - iMIN) / (MAXIMUM -MINIMUM)# -1)   # if one wants UNsigned INTs
-    # SCL = (iMAX - iMIN) / (MAXIMUM - (MINIMUM + 0))
-    # ADD = iMAX - SCL * (MAXIMUM -0)
-    ADD = iMAX - SCL * MAXIMUM
+    SCL = (iMAX - iMIN) / ( MAXIMUM -MINIMUM -1)   # -1 because 0 doesn't count
+    # ADD = iMAX - SCL *MAXIMUM
+    ADD = iMIN - SCL *MINIMUM
 
     # # testing
-    # allv = (np.linspace(MINIMUM +1, MAXIMUM, MAXIMUM) -1) *PRECISION
+    # allv = PRECISION *(np.linspace(MINIMUM, MAXIMUM-1, MAXIMUM-1) -1) +iMIN
+    # # allv = np.arange(iMIN, iMAX +PRECISION, PRECISION)
     # allv.shape
-    # # Out[22]: (65535,)
+    # # Out[22]: (65534,)
     # allv[-1] == iMAX
     # # Out[22]: True
-    # allt = ((allv - ADD) /SCL).round(0).astype('u2')
+    # allt = ((allv - ADD) /SCL)
+    # allt = allt.round(0).astype('u2')
     # np.where(np.diff(allt)!=1)
     # Out[22]: (array([], dtype=int64),)
     # vall = (allt *SCL) +ADD
@@ -1700,6 +1706,7 @@ OUT ALL THIS SECTION & ACTIVATE THE SECTION "- WGS84.CRS (netcdf definition) -"
     # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates [start]
     grid._CoordinateTransformType = 'Projection'
     grid._CoordinateAxisTypes = 'GeoY GeoX'
+    # ~~~ from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~ [end]
 
     # # STORING LOCAL COORDINATES
     yy = sub_grp.createVariable('projection_y_coordinate', 'i4', dimensions=('y')

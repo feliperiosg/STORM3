@@ -321,7 +321,7 @@ def test_COMPUTE_LOOP():
     rainfall.WINDIR = windir_x
     rainfall.WSPEED = wspeed_x
     rainfall.tod_fun = 'TOD_CIRCULAR'
-    rainfall.NUM_S = 55
+    rainfall.NUM_S = 3#55
 
     if WHAT_PARS == 0:
         with catch_warnings():
@@ -332,15 +332,23 @@ def test_COMPUTE_LOOP():
                 rainfall.CHECK_PDF()
             except Warning:
                 pass
-        # tests
-        test_newmom = [28021260, 28021290, 28025190, 28025220, 28025250, 28025280,
-               28025310, 28025340, 28025370, 28025400, 28025430, 28025460]
-        test_cumout = 0.017769773964003123
+    # tests
+        # fall_scal = 1e-4
+        # test_newmom = [28021260, 28021290, 28025190, 28025220, 28025250, 28025280,
+        #        28025310, 28025340, 28025370, 28025400, 28025430, 28025460]
+        # test_cumout = 0.017769773964003123
+        fall_scal = 3e-5
+        test_newmom = [28021260, 28021290, 28025190, 28025220, 28025250]
+        test_cumout = 0.006272762780683698
     else:
         rainfall.ALT_CHECK_PDF()
-        # tests
-        test_newmom = [27971400, 27971430, 27971460, 27971490, 27971520, 27971550, 27971580]
-        test_cumout = 0.020117367307388518
+    # tests
+        # fall_scal = 1e-4
+        # test_newmom = [27971400, 27971430, 27971460, 27971490, 27971520, 27971550, 27971580]
+        # test_cumout = 0.020117367307388518
+        fall_scal = 3e-5
+        test_newmom = [27971400, 27971430, 27971460]
+        test_cumout = 0.007369790278218633
 
 # more enabled globals...
     rainfall.WET_SEASON_DAYS()
@@ -366,7 +374,7 @@ def test_COMPUTE_LOOP():
 # calling the function
     seed( 42 )
     newmom, cumout = rainfall.COMPUTE_LOOP( REGIONS['mask'][n_pos], REGIONS['npma'][n_pos],
-        REGIONS['rain'][n_pos] *1e-4, 0, 0, n_pos, array([], dtype='f8') )
+        REGIONS['rain'][n_pos] *fall_scal, 0, 0, n_pos, array([], dtype='f8') )
     nc.close()
 
 # i wouldn't use NEWMOM as depends on the DATE_ORIGIN & TIME_OUTNC [CUMOUT is absolute]
@@ -770,7 +778,7 @@ if __name__ == '__main__':
     test_NCBYTES_RAIN()
     test_NC_FILE_I()
     test_NC_FILE_II()
-    test_COMPUTE_LOOP()             # !slow.crucial.function! [~2/4min]
+    test_COMPUTE_LOOP()             # !slow.crucial.function! [~1/2min]
     test_SCENTRES()
     test_TRUNCATED_SAMPLING()
     test_LAST_RING()

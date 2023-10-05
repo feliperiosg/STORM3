@@ -246,7 +246,8 @@ def MORPHOPEN( LAB ):
     # # plt.savefig('realization_opening.pdf', bbox_inches='tight',pad_inches=0.02)
     # # plt.close() ; plt.clf()
 # "morphology.ellipse(2,3)" does almost the same job as "cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(4,7)"
-    return new.astype('u1')
+    # return new.astype('u1')
+    return new
 
     # #-ALTERNATIVE (to SCIKIT-IMAGE MORPHOLOGICAL FILTERING) via OPEN.CV-------
     # import cv2
