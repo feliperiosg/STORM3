@@ -13,7 +13,7 @@ For an 'in-prompt' help (on these parameters) type:
 """
 
 SEASONS = 1#1             # Number of Seasons (per Run)
-NUMSIMS = 2#1#2         # Number of runs per Season
+NUMSIMS = 1#2         # Number of runs per Season
 NUMSIMYRS = 1#2         # Number of years per run (per Season)
 """
 *** perhaps, either NUMSIMS or NUMSIMYRS or both has/have to be re-thought?,
@@ -64,9 +64,8 @@ carried out here.
 PRE_FILE = './model_input/ProbabilityDensityFunctions_TWO.csv'
 # PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE-pmf.csv'
 SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file in WGS84
-# DEM_FILE = './model_input/dem/WGdem_wgs84.tif'        # aoi raster-file (optional**)
-# DEM_FILE = './model_input/dem/WGdem_26912.tif'        # aoi raster-file in local CRS (***)
-DEM_FILE = None
+DEM_FILE = './model_input/HAD_wgs84.tif'                # aoi raster-file (optional**)
+# DEM_FILE = None
 OUT_PATH = './model_output'                             # output folder
 """
 **  DEM_FILE is only required for runs at different altitudes, i.e., Z_CUTS != None
@@ -76,18 +75,19 @@ OUT_PATH = './model_output'                             # output folder
     'zonal_stats(vectors=Z_OUT.geometry, raster=DEM_FILE, stats=Z_STAT) in 'ZTRATIFICATION'.
 """
 
-# RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
-RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
-SUBGROUP = ''
-CLUSTERS = 1#4                                          # number of regions to split the whole.region into
+# # RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
+# # RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
+# RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
+# RAIN_MAP = './realisation_OND_crs-OK.nc'                # yes.interpretable CRS
+# SUBGROUP = ''
+# CLUSTERS = 5                                          # number of regions to split the whole.region into
 """
 CLUSTERS ==1 means no splitting at all!.
 The model still 'splits' the region into 1 big area equal to the catchment.
 """
 
-Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-# Z_CUTS = [1350, 1500]       # in meters!
+# Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
+Z_CUTS = [ 300,  600, 1200]  # in meters! # [28.13, 48.75, 78.57]%
 Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
 """
 Z_CUTS = [1350, 1500] are from the analysis carried out in the 'pre_processing.py' module.
@@ -158,9 +158,9 @@ USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION_GRID() -> [GRID
 # N_X       =     2313                                    # number of cells/pxls in the X-axis
 # N_Y       =     2614                                    # number of cells/pxls in the Y-axis
 # PARAMETERS for a HAD-tight-adjusted GRID ( 5km res)
-BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
-X_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-Y_RES     =     5000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+BUFFER    =     0000.                                   # in meters! -> buffer distance (out of the HAD)
+X_RES     =     1000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
+Y_RES     =     1000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
 # XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
 # YLLCORNER = -1165000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
 # N_X       =  int(405  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
@@ -168,8 +168,8 @@ Y_RES     =     5000.                                   # in meters! (pxl.resolu
 # from: https://stackoverflow.com/a/62264948/5885810
 XLLCORNER =  1350000. -(-1 *(BUFFER /X_RES) //1 *-1) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
 YLLCORNER = -1165000. -(-1 *(BUFFER /Y_RES) //1 *-1) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-N_X       =  int(405  +(-1 *(BUFFER /X_RES) //1 *-1)  *2)      # number of cells/pxls in the X-axis
-N_Y       =  int(464  +(-1 *(BUFFER /Y_RES) //1 *-1)  *2)      # number of cells/pxls in the Y-axis
+N_X       =  int(2313  +(-1 *(BUFFER /X_RES) //1 *-1)  *2)      # number of cells/pxls in the X-axis
+N_Y       =  int(2614  +(-1 *(BUFFER /Y_RES) //1 *-1)  *2)      # number of cells/pxls in the Y-axis
 # # PARAMETERS for a HAD-tight-adjusted GRID (10km res)
 # BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
 # X_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
@@ -184,7 +184,7 @@ N_Y       =  int(464  +(-1 *(BUFFER /Y_RES) //1 *-1)  *2)      # number of cells
 """
 USE ANY OF THE FOLLOWING X_Y PAIRS, IF USING "SHP_REGION() -> [BUFFER.based 1ST]"
 """
-BUFFER    =  8000.                      # in meters! -> buffer distance (out of the HAD)
+BUFFER    =  7000.                      # in meters! -> buffer distance (out of the HAD)
 X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 # X_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
@@ -236,6 +236,7 @@ SEED_YEAR = 2023                        # for your SIM/VAL to start in 2050
 # SEASONS_MONTHS = [[6,10], None]         # JUNE through OCTOBER (just ONE season)
 # # OR:
 SEASONS_MONTHS = [['mar','may'], ['oct','dec']]     # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
+SEASONS_MONTHS = SEASONS_MONTHS[::-1]    # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
 # SEASONS_MONTHS = [[10,5], ['jul','sep']]            # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
 # SEASONS_MONTHS = [['may','sep'],[11,12]]            # MAY through SEP (& e.g., NOV trhough DEC)
 TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)

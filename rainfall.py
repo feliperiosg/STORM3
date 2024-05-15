@@ -761,7 +761,8 @@ def ALT_CHECK_PDF():
               {'p': np.r_[1.], 'mus': np.r_[1.444], 'kappas': np.r_[1.0543]}]
     DOYEAR = [{'p': np.r_[0.054, 0.089, 0.07, 0.087, 0.700], 'mus': np.r_[1.9, 0.228, 1.55, 1.172, 0.558] -np.pi /2,
                'kappas': np.r_[105.32,  51.97,  87.19,  52.91, 6.82]},
-              {'p': np.r_[1.], 'mus': np.r_[0.7136], 'kappas': np.r_[3.9]}]
+              {'p': np.r_[1.], 'mus': np.r_[1.6136], 'kappas': np.r_[3.9]}]
+    DOYEAR = DOYEAR[::-1]
     # a KAPPA~=0 tranforms a VM into a UNIFORM.DISTRO from [-pi,pi]
     # https://rstudio.github.io/tfprobability/reference/tfd_von_mises.html
     WINDIR = [{'p': np.r_[1.], 'mus': np.r_[np.pi *.9], 'kappas': np.r_[0.00001]},
@@ -996,6 +997,8 @@ def TOD_CIRCULAR( N, seas, simy ):# N=120
             mus=DOYEAR[ seas ]['mus'], kappas=DOYEAR[ seas ]['kappas'], sample_size=M)
 # to DOY
         doys = (doys +np.pi) /(2*np.pi) *365 -1
+    # negatives are giving me troubles (difficult to discern if they belong to january/december)
+        doys = doys[ doys>0 ]
         # # to check out if the sampling is done correctly
         # plt.hist(doys, bins=365)
 # into actual dates
@@ -1004,7 +1007,7 @@ def TOD_CIRCULAR( N, seas, simy ):# N=120
             relativedelta(yearday=int( d )), doys.round(0) ))
         sates = pd.Series( dates )              # to pandas
 # chopping into limits
-        sates = sates[(sates>=DATE_POOL[ seas ][ 0]) & (sates<=DATE_POOL[ seas ][-1])]
+        sates = sates[(sates>=DATE_POOL[ seas ][0]) & (sates<=DATE_POOL[ seas ][-1])]
         M = len(dates) - len(sates)
         # print(M)
 # updating to SIMY year (& storing)
@@ -1141,7 +1144,7 @@ then there's no point in using circular on TOD, is it?'
 #~ CREATE AN OUTER RING/POLYGON ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # *1e3 to go from km to m
-def LAST_RING( all_radii, CENTS ):#, MINRADIUS ):# all_radii=RADII
+def LAST_RING( all_radii, CENTS ):# all_radii=RADII
 # "resolution" is the number of segments in which a.quarter.of.a.circle is divided into.
 # ...now it depends on the RADII/RES; the larger a circle is the more resolution it has.
     ring_last = list(map(lambda c,r: gpd.GeoDataFrame(
@@ -2232,7 +2235,7 @@ def COMPUTE_LOOP( MASK_SHP, NP_MASK, MRAIN, seas, simy, nreg, MOTHER ):
         RADII = TRUNCATED_SAMPLING( RADIUS[ seas ][''], [1* MINRADIUS, None], NUM_S )
         RADII = RADII *9.5 # -> so we can have large storms than the resolution
     # polygon(s) for maximum radii
-        RINGO = LAST_RING( RADII, CENTS )#, MINRADIUS )
+        RINGO = LAST_RING( RADII, CENTS )
 
     # define pandas to split the Z_bands (or not)
         qants, ztats = ZTRATIFICATION( pd.concat( RINGO ) )
