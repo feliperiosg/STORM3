@@ -23,7 +23,7 @@ from rasterio.features import shapes
 from rasterio import open as openr
 from matplotlib import pyplot as plt
 from parameters import SHP_FILE, DEM_FILE, WKT_OGC, BUFFER, X_RES, Y_RES
-from parameters import PDF_FILE, RAIN_MAP, NREGIONS, SEASON_TAG, Z_CUTS
+from parameters import PDF_FILE, RAIN_MAP, NREGIONS, SEASON_TAG, Z_CUTS, Z_STAT
 # from dask.distributed import Client, LocalCluster
 
 # https://stackoverflow.com/a/9134842/5885810  (supress warning by message)
@@ -57,6 +57,7 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 # EVENT_DATA = './model_input/0326_collect_MAM_track_hadIMERG_.nc'
 EVENT_DATA = './model_input/0326_collect_OND_track_hadIMERG_.nc'
+ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 
 
 # # parameters imported from "parameters.py"
@@ -1167,7 +1168,7 @@ class elevation:
             elevations tied to an elevation band (right).
         """
         # reading input & defaulting
-        ztat = kwargs.get('z_stat', 'median')
+        ztat = kwargs.get('z_stat', Z_STAT)
         dem_crs = kwargs.get('dem_crs', None)
         zones = kwargs.get('zones', None)
         zones_lab, zones_bin = [''], 1
@@ -1197,7 +1198,7 @@ class elevation:
         ztats = zonal_stats(vectors=geo_p, raster=rarr, affine=raff,
                             stats=ztat, nodata=-9999)
         # # line below works for raster==path-to-dem (twice!! as slow, apparently)
-        # ztats = zonal_stats(vectors=geo_.geometry, raster=raster, stats=ztat, nodata=-9999)
+        # ztats = zonal_stats(vectors=geo_.geometry, raster=rarr, stats=ztat, nodata=-9999)
         # to pandas
         ztats = pd.DataFrame(ztats)
         ztats.where(ztats>=0, other=0., inplace=True)  # other=np.nan
@@ -1230,18 +1231,18 @@ class copulas:
         """
 
         self.copula = kwargs.get('copula', GaussianCopula())
-        self.ztat = kwargs.get('z_stat', 'median')
-        self.zones = kwargs.get('zones', None)
+        self.ztat = kwargs.get('z_stat', Z_STAT)
+        self.zones = kwargs.get('zones', Z_CUTS)
         self._cset = cset
         self._xy_b = kwargs.get('xy_b', self._cset)
         self._pdic = {
-            'volume': 'total_rain',
             'duration': 'track_duration',
-            'volume_alt': 'pf_accumrain',
             'duration_alt': 'pf_lifetime',
-            'intensity': 'pf_rainrate',
+            'volume': 'total_rain',
+            'volume_alt': 'pf_accumrain',
             'max_intensity': 'pf_maxrainrate',
-            'mm_ratio': 'pf_rrate',
+            'intensity': 'pf_rainrate',
+            'mm_ratio': 'rratio',
             }
         self.v, self.u = self.pairing(pair)
         # self.rhos_alt = None
@@ -1344,92 +1345,19 @@ class copulas:
             [f.write(f'R{region}+{tag}+{x},{self.rhos[x]}\n')
              for x in self.rhos.index]
 
-    def plot(self, marker='+', color='xkcd:berry'):
+    def plot(self, **kwargs):
         prnt = kwargs.get('file', None)
+        mark = kwargs.get('marker', '+')
+        colr = kwargs.get('color', 'xkcd:berry')
         fig, ax = plt.subplots(figsize=(5, 5), dpi=150)
         self.z.iloc[:, -2:].plot(kind='scatter', x=-1, y=-2, s=42, ax=ax,
-            marker=marker, color=color, logx=True, logy=True,)
+            marker=mark, color=colr, logx=True, logy=True,)
         plt.show() if not prnt else\
             plt.savefig(prnt, bbox_inches='tight', pad_inches=0.01,
                         facecolor=fig.get_facecolor())
 
 
 # %% decay
-
-class botas:
-
-    def __init__(self, cset, **kwargs):
-        """
-        computes bi-variate copluas.\n
-        Input ->
-        *cset* : xarray - clipped dataset; or pandas - sampled values.
-        **kwargs\n
-        t_res:  float; seed data temporal resolution (in hours).\n
-        Output -> a class with an updated pd.DataFrame in *.df*.
-        """
-
-        self.t_res = kwargs.get('t_res', None)
-        # exponential decay model (alt. 1)
-        self.model = lambda x, v, i, r: v -\
-            1 / (2 * x**2) * i * np.pi * (1 - np.exp(-2 * x**2 * r**2))
-        # reading data into df
-        if isinstance(cset, xr.Dataset):
-            self.df = self.xr_base(cset)
-        elif isinstance(cset, pd.DataFrame):
-            self.df = self.pd_base(cset, self.t_res)
-        else:
-            raise AssertionError(
-                f'WRONG INPUT TYPE!\n'
-                f'cset must be either xr.Dataset or pd.DataFrame.'
-                )
-        # updating df
-        self.df = self.find_beta(self.df, self.model)
-
-    def xr_base(self, cset):
-        base = cset[['pf_maxrainrate', 'pf_rainrate', 'pf_area',]]
-        base = base.drop_vars('spatial_ref').to_dataframe()
-        base['idx'] = np.arange(len(base))
-        base.dropna(axis='index', how='any', inplace=True)
-        # computing xtra-variables
-        base['pf_radii'] = np.sqrt(base['pf_area'] / np.pi)
-        base['pf_vol'] = base['pf_rainrate'] * base['pf_area']\
-            * cset.attrs['time_resolution_hour']
-        base['pf_rrate'] = base['pf_maxrainrate'] / base['pf_rainrate']
-        base.set_index(keys=['idx'], drop=True, inplace=True)
-        return base
-
-    def pd_base(self, cset, tres):
-        bset = cset.copy(deep=False)  # does this hurts!?
-        if 'pf_radii' not in bset.columns:
-            bset['pf_radii'] = np.sqrt(bset['pf_area'] / np.pi)
-        if 'pf_rainrate' not in bset.columns:
-            bset['pf_rainrate'] = bset['pf_maxrainrate'] / bset['pf_rrate']
-        bset['pf_vol'] = bset['pf_rainrate'] * bset['pf_area'] * tres
-        return bset
-
-    def find_beta(self, base, decay_model):
-        beta, flag = betas.beta_calc(base, decay_model)
-        tmp_df = pd.DataFrame({
-            'beta': abs(np.asarray(beta).ravel()), 'flag': flag, },
-            index=base.index)
-        # 1 means 'The solution converged.'
-        tmp_df = tmp_df.loc[tmp_df['flag'] == 1, ['beta']]
-        # tmp_df.plot(y='beta', kind='hist', bins=42); plt.show()
-        base = base.join(tmp_df, how='inner')
-        return base
-
-    @staticmethod
-    def beta_calc(base_df, equation):
-        # https://stackoverflow.com/a/7015366/5885810
-        l_, s_, i_, m_ = zip(*map(lambda v, i, r:
-            optimize.fsolve(equation, 0.5, args=(v, i, r), full_output=True),
-            base_df.pf_vol, base_df.pf_maxrainrate, base_df.pf_radii))
-        return l_, i_
-
-
-# ---------------------
-# ---------------------
-
 
 class betas:
 
@@ -1473,7 +1401,7 @@ class betas:
         base['pf_radii'] = np.sqrt(base['pf_area'] / np.pi)
         base['pf_vol'] = base['pf_rainrate'] * base['pf_area']\
             * cset.attrs['time_resolution_hour']
-        base['pf_rrate'] = base['pf_maxrainrate'] / base['pf_rainrate']
+        base['rratio'] = base['pf_maxrainrate'] / base['pf_rainrate']
         base.set_index(keys=['idx'], drop=True, inplace=True)
         return base
 
@@ -1484,20 +1412,21 @@ class betas:
         base['idx'] = np.arange(len(base))
         base.dropna(axis='index', how='any', inplace=True)
         base.rename(columns={'total_rain': 'volume', 'movement_speed': 'velocity',
-                             'pf_maxrainrate': 'maxrainrate',}, inplace=True)
+                             # 'pf_maxrainrate': 'maxrainrate',
+                             }, inplace=True)
         base['volume'] = base['volume'] * cset.attrs['pixel_radius_km']**2\
             * cset.attrs['time_resolution_hour']
         # computing xtra-variables
         base['radii'] = np.sqrt(base['area'] / np.pi)
         # ratio between maxrainrate & meanrainrate
-        base['rratio'] = base['maxrainrate'] /\
+        base['rratio'] = base['pf_maxrainrate'] /\
             (base['volume'] / (base['area'] * cset.attrs['time_resolution_hour']))
         # base.set_index(keys=['idx'], drop=True, inplace=True)
         return base
 
     def pd_base(self, cset, tres):
         if 'avgrainrate' not in cset.columns:
-            cset['avgrainrate'] = cset['maxrainrate'] / cset['rratio']
+            cset['avgrainrate'] = cset['pf_maxrainrate'] / cset['rratio']
         cset['volume'] = cset['avgrainrate'] * cset['area'] * tres
         if 'radii' not in cset.columns:
             cset['radii'] = np.sqrt(cset['area'] / np.pi)
@@ -1520,7 +1449,7 @@ class betas:
         # https://stackoverflow.com/a/7015366/5885810
         l_, s_, i_, m_ = zip(*map(lambda v, i, r:
             optimize.fsolve(equation, 0.5, args=(v, i, r), full_output=True),
-            base_df['volume'], base_df['maxrainrate'], base_df['radii']))
+            base_df['volume'], base_df['pf_maxrainrate'], base_df['radii']))
         return l_, i_
 
 
@@ -1844,8 +1773,9 @@ class discrete:
 def compute():
 
 # -1. CREATE XPORTING FILE
-
-    FILE_PDF = PDF_FILE.replace('.csv', f'_{SEASON_TAG}_{NREGIONS}r.csv')
+    FILE_PDF = abspath(join(parent_d,
+        PDF_FILE.replace('.csv', f'_{SEASON_TAG}_{NREGIONS}r.csv')
+        ))
     # https://www.geeksforgeeks.org/create-an-empty-file-using-python/
     try:
         with open(FILE_PDF, 'w'):
@@ -1853,7 +1783,6 @@ def compute():
     except FileNotFoundError:
         print(f"for some reason the path '{dirname(FILE_PDF)}' does not "\
               'exist!!.\nplease, create such a folder... and come back.')
-
 
 #  0. SPLITING SHP INTO AOI
     # if reading SEASONAL.MAP with XARRAY
@@ -1863,19 +1792,15 @@ def compute():
         decode_coords='all',  # "decode_coords" helps to interpret CRS
         )
     seas = seas.drop_vars('spatial_ref').rename({'lat': 'y', 'lon': 'x'})
-
     space = masking()
     rain_ = field(seas, space.xs, space.ys)
-
     areas = regional(rain_.field_prj, space.buffer_mask,
                      space.catchment_mask, nr=NREGIONS)
     areas.xport_shp(file=f'regions_{SEASON_TAG}_{NREGIONS}r.shp')
 
-
 #  1. READ TRACK.DATA
-
-    dzet = xr.open_dataset(EVENT_DATA, chunked_array_type='dask', chunks='auto')
-
+    dzet = xr.open_dataset(abspath(join(parent_d, EVENT_DATA)),
+                           chunked_array_type='dask', chunks='auto')
 
     # for i, _ in enumerate(areas.gshape.index):
     for i, _ in enumerate(tqdm(areas.gshape.index, ncols=50)):
@@ -1887,12 +1812,9 @@ def compute():
         # one_area.region.geometry.xs(0)            # plotting
         print(f'\n{one_area.region}')
 
-
 #  3. CLIP TRACK.DATA to A.O.I
-
         dset = clipping(dzet, one_area.region, lf=.8)
         # dset.plot()  # dset.plot(file='p01.png')
-
 
 #  4. FIT DURATION (1st ??)
         dur = (dset.clip_set.track_duration *
@@ -1908,24 +1830,20 @@ def compute():
         # fit_dur.pdf
         # fit_dur.plot()
 
-
 #  5. PANDAS (containing all the rest vars)
-
         # ALTERNATIVE 1: stats based on TOTALS (plus RRATIO)
         all_vars = betas(dset.clip_set, method='total')
         # all_vars.df
         # pd.set_option('display.max_columns', None)
 
-
 #  6. FIT MAXINTENSITY
-        fit_int = fit_pdf(all_vars.df.maxrainrate, family='rskm',)
+        fit_int = fit_pdf(all_vars.df.pf_maxrainrate, family='rskm',)
         fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
         # fit_int.pdf
         # fit_int.plot()
 
         # # if doing log-transform
-        # fit_int = fit_pdf(np.log(all_vars.df.maxrainrate), family='norm',)
-
+        # fit_int = fit_pdf(np.log(all_vars.df.pf_maxrainrate), family='norm',)
 
 #  7. FIT RADII
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
@@ -1936,22 +1854,25 @@ def compute():
         # fit_are = fit_pdf(all_vars.df.area, family='nsym',)
         # fit_are.plot()
 
+        if ALTERNATIV == 1:
+    #  8. FIT DECAY
+            # fit_dec = fit_pdf(all_vars.df.beta, family=['alpha', 'betaprime'],
+            #                   method='sumsquare_error', e_col='E')
+            fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
+            fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=i)
+            # fit_dec.plot()
+            # fit_dec.plot(file='zome.jpg', xlim=(0.005, 0.09), method='sumsquare_error')
+            # fit_dec.group.iloc[0][0].summary()
+        elif ALTERNATIV == 2:
+    #  8. FIT SOME COPULA ('max_intensity', 'mm_ratio')
+            cop_one = copulas(all_vars.df, ('max_intensity', 'mm_ratio'), xy_b=dset.clip_set)
 
-#  8. FIT DECAY
-        # fit_dec = fit_pdf(all_vars.df.beta, family=['alpha', 'betaprime'],
-        #                   method='sumsquare_error', e_col='E')
-        fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
-        fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=i)
-        # fit_dec.plot()
-        # fit_dec.plot(file='zome.jpg', xlim=(0.005, 0.09), method='sumsquare_error')
-        # fit_dec.group.iloc[0][0].summary()
-
-
-# #  9. FIT RRATIO (very optional in ALTERNATIVE 1)
-#         fit_rat = fit_pdf(all_vars.df.rratio, family='rskm',)
-#         fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=i)
-#         # fit_rat.plot(bins=51, xlim=(-1,41))
-
+    #  9. FIT RRATIO (very optional in ALTERNATIVE 1)
+            fit_rat = fit_pdf(all_vars.df.rratio, family='rskm',)
+            fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=i)
+            # fit_rat.plot(bins=51, xlim=(-1,41))
+        else:
+            raise TypeError("wrong ALTERNATIV parameter passed!.")
 
 # 10. FIT VELOCITY (in m/s)
         fit_vel = fit_pdf(all_vars.df.velocity, family='norm',)
@@ -1961,7 +1882,6 @@ def compute():
         # # in not minding ZEROS, we're removing ~1/3 of the data!!
         # vel = all_vars.df.velocity[all_vars.df.velocity > 0.01]
         # fit_vel = fit_pdf(vel, family='nsym',)
-
 
 # 11. DIRECTION [CIRCULAR]
         # track-based
@@ -1980,7 +1900,6 @@ def compute():
         # mdir_rad = mdir.dropna(dim='t_n', how='all').compute().data
         # dir_c = circular(mdir_rad, data_type='rad', met_cap=.7)
 
-
 # 12. TIME of DAY [CIRCULAR]
         tod = dset.clip_set.start_basetime.load()
         tod = (tod.dt.hour + tod.dt.minute / 60 + tod.dt.second / 3600).data
@@ -1988,7 +1907,6 @@ def compute():
         # tod_c.plot_samples(data_type='tod', bins=50)
         # tod_c.plot_bic()
         tod_c.save(file=FILE_PDF, tag='DATIME', region=i)
-
 
 # 13. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
