@@ -61,10 +61,9 @@ be passed from the command line. Therefore, their modification/tweaking must
 carried out here.
 """
 
-PRE_FILE = './model_input/ProbabilityDensityFunctions_TWO.csv'
-# PRE_FILE = './model_input/ProbabilityDensityFunctions_ONE-pmf.csv'
-SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file in WGS84
-DEM_FILE = './model_input/HAD_wgs84.tif'                # aoi raster-file (optional**)
+PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
+SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
+DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
 # DEM_FILE = None
 OUT_PATH = './model_output'                             # output folder
 """
@@ -75,20 +74,23 @@ OUT_PATH = './model_output'                             # output folder
     'zonal_stats(vectors=Z_OUT.geometry, raster=DEM_FILE, stats=Z_STAT) in 'ZTRATIFICATION'.
 """
 
-# # RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# # RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
-# RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
-# RAIN_MAP = './realisation_OND_crs-OK.nc'                # yes.interpretable CRS
-# SUBGROUP = ''
-# CLUSTERS = 5                                          # number of regions to split the whole.region into
+# RAIN_MAP = '../3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'   # no.CRS at all!
+# RAIN_MAP = './realisation_MAM_crs-wrong.nc'  # no..interpretable CRS
+RAIN_MAP = './model_input/realisation_MAM.nc'  # yes.interpretable CRS
+RAIN_MAP = './model_input/realisation_OND.nc'  # yes.interpretable CRS
+NREGIONS = 4  # number of regions to split the whole.region into
+NREGIONS = 1  # number of regions to split the whole.region into
 """
-CLUSTERS ==1 means no splitting at all!.
+NREGIONS ==1 means no splitting at all!.
 The model still 'splits' the region into 1 big area equal to the catchment.
 """
+SEASON_TAG = 'OND'
 
-# Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-Z_CUTS = [ 300,  600, 1200]  # in meters! # [28.13, 48.75, 78.57]%
 Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
+# Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
+# Z_CUTS = [1000, 2000, 3000]  # [67.53, 97.15, 99.87]%
+Z_CUTS = [300,  600, 1200]  # in meters! [28.13, 48.75, 78.57]%
+# Z_CUTS = None  # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
 """
 Z_CUTS = [1350, 1500] are from the analysis carried out in the 'pre_processing.py' module.
 They imply 3 altitude-bands, namely, [0, 1350), [1350, 1500), [1500, 9999), for which the
