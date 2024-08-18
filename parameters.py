@@ -62,6 +62,7 @@ carried out here.
 """
 
 PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
+ZON_FILE = './model_input/regions.shp'  # nK regions file
 SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
 DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
 # DEM_FILE = None
@@ -78,7 +79,6 @@ OUT_PATH = './model_output'                             # output folder
 # RAIN_MAP = './realisation_MAM_crs-wrong.nc'  # no..interpretable CRS
 RAIN_MAP = './model_input/realisation_MAM.nc'  # yes.interpretable CRS
 RAIN_MAP = './model_input/realisation_OND.nc'  # yes.interpretable CRS
-# NREGIONS = 1  # number of regions to split the whole.region into
 NREGIONS = 4  # number of regions to split the whole.region into
 """
 NREGIONS ==1 means no splitting at all!.

@@ -22,7 +22,7 @@ from rasterio.enums import Resampling  # IF doing BILINEAR or NEAREST too?
 from rasterio.features import shapes
 from rasterio import open as openr
 from matplotlib import pyplot as plt
-from parameters import SHP_FILE, DEM_FILE, WKT_OGC, BUFFER, X_RES, Y_RES
+from parameters import SHP_FILE, DEM_FILE, WKT_OGC, BUFFER, X_RES, Y_RES, ZON_FILE
 from parameters import PDF_FILE, RAIN_MAP, NREGIONS, SEASON_TAG, Z_CUTS, Z_STAT
 # from dask.distributed import Client, LocalCluster
 
@@ -63,12 +63,12 @@ ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 # # parameters imported from "parameters.py"
 
 # PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
+# ZON_FILE = './model_input/regions.shp'  # nK regions file
 # SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
 # DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
 # # RAIN_MAP = './model_input/realisation_MAM.nc'
 # RAIN_MAP = './model_input/realisation_OND.nc'
 # NREGIONS = 4
-# NREGIONS = 1
 # SEASON_TAG = 'OND'
 
 # # Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
@@ -543,8 +543,8 @@ class regional:
         return dict(zip(zone, new_))
 
     def xport_shp(self, **kwargs):
-        prnt = kwargs.get('file', 'regions.shp')
-        self.gshape.to_file(f'./model_input/{prnt}', driver='ESRI Shapefile')
+        prnt = kwargs.get('file', ZON_FILE)
+        self.gshape.to_file(prnt, driver='ESRI Shapefile')
         return
 
 
@@ -1164,11 +1164,13 @@ class elevation:
             range, nodata, nan).\n
         zones   : list; specifying the limits of the elevation bands.\n
         dem_crs : DEM's WKT.\n
+        batch_size : int; amount of centers to process at a time.\n
         Output -> list with pd.DataFrame containing summary.stats (left), and\
             elevations tied to an elevation band (right).
         """
         # reading input & defaulting
         ztat = kwargs.get('z_stat', Z_STAT)
+        quts = kwargs.get('batch_size', 2000)
         dem_crs = kwargs.get('dem_crs', None)
         zones = kwargs.get('zones', None)
         zones_lab, zones_bin = [''], 1
@@ -1194,13 +1196,24 @@ class elevation:
                 "No CRS found anywhere!\n"\
                 "You must provide a raster with defined CRS or a valid CRS via 'dem_crs'."
                 )
-        # calculate zonal statistics
-        ztats = zonal_stats(vectors=geo_p, raster=rarr, affine=raff,
-                            stats=ztat, nodata=-9999)
-        # # line below works for raster==path-to-dem (twice!! as slow, apparently)
-        # ztats = zonal_stats(vectors=geo_.geometry, raster=rarr, stats=ztat, nodata=-9999)
-        # to pandas
-        ztats = pd.DataFrame(ztats)
+        # calculate zonal statistics:
+        # ... if the GeoSeries is too large, split it into chunks (saves mem??)
+        if geo_p.index.size > quts:
+            zplit = np.array_split(geo_p.index, int(geo_p.index.size / quts))
+            ztats = list(map(
+                lambda x: zonal_stats(vectors=geo_p.loc[x], raster=rarr,
+                                      affine=raff, stats=ztat, nodata=-9999)
+                , zplit))
+            ztats = pd.concat(list(map(pd.DataFrame, ztats)), ignore_index=True)
+        else:
+            ztats = zonal_stats(vectors=geo_p, raster=rarr, affine=raff,
+                                stats=ztat, nodata=-9999)
+            # # line below works for raster==path-to-dem (twice!! as slow, apparently)
+            # ztats = zonal_stats(vectors=geo_.geometry, raster=rarr, stats=ztat, nodata=-9999)
+            ztats = pd.DataFrame(ztats)
+        # assign index
+        ztats.reset_index(names='in_id', inplace=True)
+        ztats.set_index(keys=geo_p.index, inplace=True)
         ztats.where(ztats>=0, other=0., inplace=True)  # other=np.nan
         # column 'E' classifies all Z's according to the CUTS
         ztats['E'] = pd.cut(ztats[ztat], bins=zones_bin,
@@ -1216,12 +1229,13 @@ class elevation:
 
 class copulas:
 
-    def __init__(self, cset, pair, **kwargs):
+    def __init__(self, cset, pair, method, **kwargs):
         """
         computes bi-variate copluas.\n
         Input ->
         *cset* : xarray; clipped dataset; or pandas.
         *pair* : tuple; either ('intensity', 'duration') or ('volume', 'duration').\n
+        *method* : str; one of 'pf', 'total', or None
         **kwargs\n
         xy_b: xarray (or pandas?) containing lon, lat, and buffer.\n
         copula: statsmodels copula; e.g., GaussianCopula().\n
@@ -1246,7 +1260,7 @@ class copulas:
             }
         self.v, self.u = self.pairing(pair)
         # self.rhos_alt = None
-        self.z = self.z_frame(self._xy_b, pair)
+        self.z = self.z_frame(self._xy_b, pair, method)
         self.rhos = self.z.groupby(by=['E'], observed=False).apply(
             lambda x: self.copula.fit_corr_param(
                 x[list(pair)]), include_groups=False)
@@ -1274,20 +1288,25 @@ class copulas:
         # var = vvar * self._cset.attrs['pixel_radius_km']**2  # when VOLUME!
         return vvar, uvar
 
-    def z_frame(self, xyz, pair):
+    def z_frame(self, xyz, pair, method):
         # all PFs!
         if isinstance(xyz, xr.Dataset):
             base = xyz[['pf_lon', 'pf_lat', 'pf_area',]]
             base = base.drop_vars('spatial_ref').to_dataframe()
+            if method == 'total':
+                base = base.groupby(level=['tracks', 'times']).agg(
+                    {'pf_lon': 'mean', 'pf_lat': 'mean', 'pf_area': 'max'})
             base['idx'] = np.arange(len(base))
             base.dropna(axis='index', how='any', inplace=True)
-            base.set_index(keys=['idx'], drop=True, inplace=True)
+            # base.set_index(keys=['idx'], drop=True, inplace=True)
         # IF a pd.DataFrame is passed...
         # THE indices of XYZ must similar.in.origin as those of ._CSET
         zeta = elevation(base['pf_lon'], base['pf_lat'], buffer=base['pf_area'],
                          units='km^2', index=base.index)
         qant, zlev = elevation.retrieve_z(zeta.geom_, zeta.dem_path,
-                                          z_stat=self.ztat, zones=self.zones)
+                                          z_stat=self.ztat, zones=self.zones
+                                          # batch_size=500, # dem_crs=,
+                                          )
         zlev['Z'] = zlev['E'].str.removeprefix('Z').astype('f4')\
             if self.zones else 0.
         # collect()
@@ -1312,7 +1331,7 @@ class copulas:
                 'stat': tmp,
                 'zone': np.char.add('Z', upz[0].astype('u2').astype('str')),
                 }).sort_values(by='zone', ascending=True)
-            tlev.columns = zlev.columns[:2]
+            tlev.columns = zlev.columns[1:3]
             df_tmp = pd.DataFrame(data={pair[0]: self.v, pair[1]: self.u})
         else:
             if isinstance(self._cset, xr.Dataset):
@@ -1326,7 +1345,8 @@ class copulas:
                 df_tmp = pd.DataFrame(data={pair[0]: self.v, pair[1]: self.u})
             # adjust tlev
             tlev = zlev.drop(columns='Z')
-            tlev.set_index(base.index[tlev.index], inplace=True)
+            # NO.NEED when using COPULA XYZ for TRACKS.&.TIMES!
+            # tlev.set_index(keys=base.index[tlev.index], inplace=True)
         # append the pandas
         copula_frame = tlev.merge(df_tmp, left_index=True, right_index=True,)
         return copula_frame
@@ -1772,9 +1792,12 @@ class discrete:
 #     if region=None:
 def compute():
 
-# -1. CREATE XPORTING FILE
+# -1. CREATE XPORTING FILE (for csv & shp)
     FILE_PDF = abspath(join(parent_d,
         PDF_FILE.replace('.csv', f'_{SEASON_TAG}_{NREGIONS}r.csv')
+        ))
+    FILE_ZON = abspath(join(parent_d,
+        ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{NREGIONS}r.shp')
         ))
     # https://www.geeksforgeeks.org/create-an-empty-file-using-python/
     try:
@@ -1796,7 +1819,7 @@ def compute():
     rain_ = field(seas, space.xs, space.ys)
     areas = regional(rain_.field_prj, space.buffer_mask,
                      space.catchment_mask, nr=NREGIONS)
-    areas.xport_shp(file=f'regions_{SEASON_TAG}_{NREGIONS}r.shp')
+    areas.xport_shp(file=FILE_ZON)
 
 #  1. READ TRACK.DATA
     dzet = xr.open_dataset(abspath(join(parent_d, EVENT_DATA)),
@@ -1834,18 +1857,51 @@ def compute():
         # ALTERNATIVE 1: stats based on TOTALS (plus RRATIO)
         all_vars = betas(dset.clip_set, method='total')
         # all_vars.df
-        # pd.set_option('display.max_columns', None)
 
-#  6. FIT MAXINTENSITY
-        fit_int = fit_pdf(all_vars.df.pf_maxrainrate, family='rskm',)
-        fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
-        # fit_int.pdf
-        # fit_int.plot()
+        if ALTERNATIV == 1:
+    #  6. FIT MAXINTENSITY
+            fit_int = fit_pdf(all_vars.df.pf_maxrainrate, family='rskm',)
+            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
+            # fit_int.pdf
+            # fit_int.plot()
 
-        # # if doing log-transform
-        # fit_int = fit_pdf(np.log(all_vars.df.pf_maxrainrate), family='norm',)
+            # # if doing log-transform
+            # fit_int = fit_pdf(np.log(all_vars.df.pf_maxrainrate), family='norm',)
 
-#  7. FIT RADII
+    #  7. FIT DECAY (very optional in ALTERNATIV 2)
+            fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
+            fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=i)
+            # fit_dec.plot()
+            # fit_dec.plot(file='zome.jpg', xlim=(0.005, 0.09), method='sumsquare_error')
+            # fit_dec.group.iloc[0][0].summary()
+
+        elif ALTERNATIV == 2:
+    #  6. FIT SOME COPULA ('max_intensity', 'mm_ratio')
+            cop_one = copulas(all_vars.df, ('max_intensity', 'mm_ratio'),
+                              method='total', xy_b=dset.clip_set)
+            # cop_one.rhos  # cop_one.z
+            # cop_one.plot()
+            # cop_one.plot(marker='x', color='xkcd:cool green')
+            cop_one.save(file=FILE_PDF, tag='COPONE_RHO', region=i)
+
+    #  7. NEW E FRAME
+            all_vars_e = all_vars.df.merge(cop_one.z, left_index=True, right_index=True,)
+
+    #  8. FIT MAXINTENSITY
+            fit_int = fit_pdf(all_vars_e[['max_intensity', 'E']], e_col='E', family='rskm',)
+            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
+            # fit_int.pdf
+            # fit_int.plot()
+
+    #  9. FIT RRATIO (very optional in ALTERNATIV 1)
+            fit_rat = fit_pdf(all_vars_e[['rratio', 'E']], e_col='E', family='rskm',)
+            fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=i)
+            # fit_rat.plot(bins=51, xlim=(-1,41))
+
+        else:
+            raise TypeError("wrong ALTERNATIV parameter passed!.")
+
+# 10. FIT RADII
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
         fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=i)
         # fit_rad.plot()
@@ -1854,27 +1910,7 @@ def compute():
         # fit_are = fit_pdf(all_vars.df.area, family='nsym',)
         # fit_are.plot()
 
-        if ALTERNATIV == 1:
-    #  8. FIT DECAY
-            # fit_dec = fit_pdf(all_vars.df.beta, family=['alpha', 'betaprime'],
-            #                   method='sumsquare_error', e_col='E')
-            fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
-            fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=i)
-            # fit_dec.plot()
-            # fit_dec.plot(file='zome.jpg', xlim=(0.005, 0.09), method='sumsquare_error')
-            # fit_dec.group.iloc[0][0].summary()
-        elif ALTERNATIV == 2:
-    #  8. FIT SOME COPULA ('max_intensity', 'mm_ratio')
-            cop_one = copulas(all_vars.df, ('max_intensity', 'mm_ratio'), xy_b=dset.clip_set)
-
-    #  9. FIT RRATIO (very optional in ALTERNATIVE 1)
-            fit_rat = fit_pdf(all_vars.df.rratio, family='rskm',)
-            fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=i)
-            # fit_rat.plot(bins=51, xlim=(-1,41))
-        else:
-            raise TypeError("wrong ALTERNATIV parameter passed!.")
-
-# 10. FIT VELOCITY (in m/s)
+# 11. FIT VELOCITY (in m/s)
         fit_vel = fit_pdf(all_vars.df.velocity, family='norm',)
         fit_vel.save(file=FILE_PDF, tag='VELMOV_PDF', region=i)
         # fit_vel.plot(bins=51, xlim=(-11, 41), N=5)
@@ -1883,7 +1919,7 @@ def compute():
         # vel = all_vars.df.velocity[all_vars.df.velocity > 0.01]
         # fit_vel = fit_pdf(vel, family='nsym',)
 
-# 11. DIRECTION [CIRCULAR]
+# 12. DIRECTION [CIRCULAR]
         # track-based
         mdir = dset.clip_set.movement_theta / 360 * 2 * np.pi - np.pi
         mdir_rad = xr.apply_ufunc(one_vm, mdir, dask='parallelized'#'allowed'
@@ -1900,7 +1936,7 @@ def compute():
         # mdir_rad = mdir.dropna(dim='t_n', how='all').compute().data
         # dir_c = circular(mdir_rad, data_type='rad', met_cap=.7)
 
-# 12. TIME of DAY [CIRCULAR]
+# 13. TIME of DAY [CIRCULAR]
         tod = dset.clip_set.start_basetime.load()
         tod = (tod.dt.hour + tod.dt.minute / 60 + tod.dt.second / 3600).data
         tod_c = circular(tod, data_type='tod', met_cap=.93)
@@ -1908,7 +1944,7 @@ def compute():
         # tod_c.plot_bic()
         tod_c.save(file=FILE_PDF, tag='DATIME', region=i)
 
-# 13. DAY of YEAR [CIRCULAR]
+# 14. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
         doy_c = circular(doy, data_type='doy', met_cap=.83)
         # doy_c.plot_samples(data_type='doy', bins=20)
