@@ -46,8 +46,8 @@ if gdal.__version__.__getitem__(0) == '3':
 parent_d = dirname(__file__)  # otherwise, will append the path.of.the.tests
 # parent_d = './'  # to be used in IPython
 
-# https://stackoverflow.com/a/20627316/5885810
-pd.options.mode.chained_assignment = None  # default='warn'
+# # https://stackoverflow.com/a/20627316/5885810
+# pd.options.mode.chained_assignment = None  # default='warn'
 # pd.set_option('display.max_columns', None)
 # pd.set_option('display.width', 1000)
 tqdm.pandas(ncols=50)  # , desc="progress-bar")
@@ -59,6 +59,7 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 EVENT_DATA = './model_input/0326_collect_OND_track_hadIMERG_.nc'
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 
+OWN_MASK = './model_input/KC_regions.shp'
 
 # # parameters imported from "parameters.py"
 
@@ -102,10 +103,10 @@ ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 #     'AUTHORITY["EPSG","42106"]]'
 
 
-# %% regionaliziing
+# %% region masking
 
 class masking:
-    # having done: from parameters import *
+
     def __init__(self, **kwargs):
 
         self.catch_shp = kwargs.get('catchment', SHP_FILE)
@@ -134,11 +135,12 @@ class masking:
         # wtrshd = wtrwgs.to_crs(epsg=42106)  # this code does NOT work!
         wtrshd = wtrwgs.to_crs(crs=self.wkt_prj)  # //epsg.io/42106.wkt
         BUFFRX = GeoDataFrame(geometry=wtrshd.buffer(self.buffer))
+        BUFFRX['burn'] = np.arange(1, len(BUFFRX) + 1)
         # infering (and rounding) the limits of the buffer-zone
-        llim = np.floor(BUFFRX.bounds.minx[0] / self.x_res) * self.x_res
-        rlim = np.ceil(BUFFRX.bounds.maxx[0] / self.x_res) * self.x_res
-        blim = np.floor(BUFFRX.bounds.miny[0] / self.y_res) * self.y_res
-        tlim = np.ceil(BUFFRX.bounds.maxy[0] / self.y_res) * self.y_res
+        llim = np.floor(BUFFRX.bounds.minx.min() / self.x_res) * self.x_res
+        rlim = np.ceil(BUFFRX.bounds.maxx.max() / self.x_res) * self.x_res
+        blim = np.floor(BUFFRX.bounds.miny.min() / self.y_res) * self.y_res
+        tlim = np.ceil(BUFFRX.bounds.maxy.max() / self.y_res) * self.y_res
         self.bbbox = {'l': llim, 'r': rlim, 'b': blim, 't': tlim}
 
         tmp = gdal.Rasterize(
@@ -146,7 +148,8 @@ class masking:
             #     'tmp-raster_mask-buff.tif', BUFFRX.to_json(), format='GTiff',
             # ACTIVATE if IN.MEMORY
             '', BUFFRX.to_json(), format='MEM',
-            xRes=self.x_res, yRes=self.y_res, noData=0, burnValues=1,
+            # xRes=self.x_res, yRes=self.y_res, noData=0, attribute=burnValues=1,
+            xRes=self.x_res, yRes=self.y_res, noData=0, attribute='burn',
             # add=0,
             allTouched=True, outputType=gdal.GDT_Int16,
             outputBounds=[llim, blim, rlim, tlim],
@@ -257,7 +260,7 @@ class masking:
 
 
 class field:
-    # having done: from parameters import *
+
     def __init__(self, rain_map, x_prj, y_prj, **kwargs):
 
         self.field = rain_map
@@ -265,8 +268,8 @@ class field:
         self.y_prj = y_prj
         self.wkt_prj = kwargs.get('wkt_prj', WKT_OGC)
         self.resampling = kwargs.get('resampling', Resampling.nearest)
-        self.void = field.empty_map(self.x_prj, self.y_prj, self.wkt_prj)
-        self.field_prj = field.reproject(self.field, self.void, self.resampling)
+        self._void = field.empty_map(self.x_prj, self.y_prj, self.wkt_prj)
+        self.field_prj = field.reproject(self.field, self._void, self.resampling)
 
     # void RIO.XARRAY in some local system
     @staticmethod
@@ -346,6 +349,8 @@ class field:
         return pile
 
 
+# %% region k-means
+
 class regional:
 
     def __init__(self, map_prj, mask_bfr, mask_cat, **kwargs):
@@ -353,21 +358,70 @@ class regional:
         self.up_dic = None
         self.wkt_prj = kwargs.get('wkt_prj', WKT_OGC)
         self.n_ = kwargs.get('nr', 1)
+        self.statistic = kwargs.get('stat', 'mean')
         self.realization = map_prj
         self.buffer = mask_bfr
         self.catchment = mask_cat
-        self.regions, self.nr_dic = self.k_regions(self.realization,
-                                                   self.catchment, self.n_)
-        self.morph = self.morphopen(self.regions)
-        # self.morph = self.regions
-        self.gshape = self.to_shp(self.morph, self.realization, self.buffer,
-                                  self.catchment, self.wkt_prj)
+        if np.in1d(self.buffer, np.array([0, 1])).all():
+            # this means there are NO.partitions/regions in buffer!
+            self.regions, self.nr_dic = self.k_regions(
+                self.realization, self.catchment, self.n_)
+            self.morph = self.morphopen(self.regions)
+            # self.morph = self.regions
+            self.gshape = self.to_shp(self.morph, self.realization, self.buffer,
+                                      self.catchment, self.wkt_prj)
+        else:
+            # this means that k-means should NOT be computed!
+            self.n_ = np.unique(self.buffer).size - 1  # 0 doesn't count
+            self.regions, self.nr_dic = self.n_regions(
+                self.realization, self.catchment, self.buffer, self.statistic)
+            self.morph = None
+            self.gshape = self.to_shp(self.regions, self.realization, self.buffer,
+                                      self.catchment, self.wkt_prj)
 
         # test = regional(rain_.field_prj, space.buffer_mask, space.catchment_mask,  nr=4)
         # test.nr_dic
         # plt.imshow(test.regions, cmap='turbo', interpolation='none'); plt.colorbar()
         # plt.imshow(test.morph, cmap='turbo', interpolation='none'); plt.colorbar()
         # test.up_dic
+
+    def n_regions(self, r_eal, catch, buff, statistic):
+        """
+        computes the n-statistic over the field.\n
+        Input ->
+        *r_eal* : 2D.numpy; rainfall.field [realization].
+        *catch* : 2D.numpy; catchment/region.
+        *buff* : 2D.numpy; catchment/region [previously regionalized].
+        *statistic*: str; nan.statistic to compute (default 'mean').\n
+        **kwargs\n
+        Output -> 2D.numpy with splitted regions; and dic with n_means.per.region.
+        """
+
+        # # FOR A MASK IN THE WHOLE [RECTANGULAR] DOMAIN
+        # reg = np.ma.MaskedArray(r_eal.rain.data.copy(), False)
+        # FOR A MASK IN THE WHOLE OF THE CATCHMENT
+        reg = np.ma.MaskedArray(r_eal.rain.data.copy(), ~catch.astype('bool'))
+        # # ... if BAND was NOT removed!
+        # reg = np.ma.MaskedArray(
+        #     r_eal.rain.rain['band'==1, :].data.copy(), ~catch.astype('bool'))
+
+        # nans outside mask
+        reg[reg.mask] = np.nan
+
+        LAB = buff.astype('f4')
+        LAB[LAB == 0] = np.nan
+        # # test (to check if it is! the sought region)
+        # rog = reg.copy()
+        # rog[LAB != 1] = np.nan
+
+        reg_tag = np.unique(LAB)
+        reg_tag = reg_tag[~np.isnan(reg_tag)]
+        kcentr = [np.array([eval(f'np.nan{statistic}(reg[LAB == {x}])')]) for x
+                  in reg_tag]
+        KAT = list(map(str, reg_tag.astype('u2')))
+
+        return LAB, dict(zip(KAT, kcentr))
+
 
     def sort_kmeans(self, k_means):
         # ONLY LABELS & CENTERS are SORTED!
@@ -1815,8 +1869,13 @@ def compute():
         decode_coords='all',  # "decode_coords" helps to interpret CRS
         )
     seas = seas.drop_vars('spatial_ref').rename({'lat': 'y', 'lon': 'x'})
-    space = masking()
+    # seas.rain.plot(cmap='gist_ncar', robust=True)
+
+    # space = masking()
+    space = masking(catchment=SHP_FILE)
+    # plt.imshow(space.buffer_mask, origin='upper', interpolation='none')
     rain_ = field(seas, space.xs, space.ys)
+
     areas = regional(rain_.field_prj, space.buffer_mask,
                      space.catchment_mask, nr=NREGIONS)
     areas.xport_shp(file=FILE_ZON)
@@ -1825,8 +1884,8 @@ def compute():
     dzet = xr.open_dataset(abspath(join(parent_d, EVENT_DATA)),
                            chunked_array_type='dask', chunks='auto')
 
-    # for i, _ in enumerate(areas.gshape.index):
-    for i, _ in enumerate(tqdm(areas.gshape.index, ncols=50)):
+    # for i, r in enumerate(areas.gshape.region):
+    for i, r in enumerate(tqdm(areas.gshape.region, ncols=50)):
 
 #  2. DEFINE THE AREA OF ANALYSIS
         # one_area = region()  # if.doing.the.whole.area (also?)
@@ -1849,7 +1908,7 @@ def compute():
         # fit_dur = discrete(dur.data, method='nllf')
 
         fit_dur = fit_pdf(dur.data, family='nsym',)
-        fit_dur.save(file=FILE_PDF, tag='AVGDUR_PDF', region=i)  # 'AVGDUR_PMF'
+        fit_dur.save(file=FILE_PDF, tag='AVGDUR_PDF', region=r)  # 'AVGDUR_PMF'
         # fit_dur.pdf
         # fit_dur.plot()
 
@@ -1861,7 +1920,7 @@ def compute():
         if ALTERNATIV == 1:
     #  6. FIT MAXINTENSITY
             fit_int = fit_pdf(all_vars.df.pf_maxrainrate, family='rskm',)
-            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
+            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=r)
             # fit_int.pdf
             # fit_int.plot()
 
@@ -1870,7 +1929,7 @@ def compute():
 
     #  7. FIT DECAY (very optional in ALTERNATIV 2)
             fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
-            fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=i)
+            fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=r)
             # fit_dec.plot()
             # fit_dec.plot(file='zome.jpg', xlim=(0.005, 0.09), method='sumsquare_error')
             # fit_dec.group.iloc[0][0].summary()
@@ -1882,20 +1941,20 @@ def compute():
             # cop_one.rhos  # cop_one.z
             # cop_one.plot()
             # cop_one.plot(marker='x', color='xkcd:cool green')
-            cop_one.save(file=FILE_PDF, tag='COPONE_RHO', region=i)
+            cop_one.save(file=FILE_PDF, tag='COPONE_RHO', region=r)
 
     #  7. NEW E FRAME
             all_vars_e = all_vars.df.merge(cop_one.z, left_index=True, right_index=True,)
 
     #  8. FIT MAXINTENSITY
             fit_int = fit_pdf(all_vars_e[['max_intensity', 'E']], e_col='E', family='rskm',)
-            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=i)
+            fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=r)
             # fit_int.pdf
             # fit_int.plot()
 
     #  9. FIT RRATIO (very optional in ALTERNATIV 1)
             fit_rat = fit_pdf(all_vars_e[['rratio', 'E']], e_col='E', family='rskm',)
-            fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=i)
+            fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=r)
             # fit_rat.plot(bins=51, xlim=(-1,41))
 
         else:
@@ -1903,7 +1962,7 @@ def compute():
 
 # 10. FIT RADII
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
-        fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=i)
+        fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=r)
         # fit_rad.plot()
 
         # # if working with areas
@@ -1912,7 +1971,7 @@ def compute():
 
 # 11. FIT VELOCITY (in m/s)
         fit_vel = fit_pdf(all_vars.df.velocity, family='norm',)
-        fit_vel.save(file=FILE_PDF, tag='VELMOV_PDF', region=i)
+        fit_vel.save(file=FILE_PDF, tag='VELMOV_PDF', region=r)
         # fit_vel.plot(bins=51, xlim=(-11, 41), N=5)
 
         # # in not minding ZEROS, we're removing ~1/3 of the data!!
@@ -1928,7 +1987,7 @@ def compute():
         # tod_c.plot_samples(file='zome_file.jpg', data_type='dir', bins=50)
         # dir_c.plot_samples(data_type='dir')
         # dir_c.plot_bic()
-        dir_c.save(file=FILE_PDF, tag='DIRMOV', region=i)
+        dir_c.save(file=FILE_PDF, tag='DIRMOV', region=r)
 
         # # for all tracks+timesteps
         # mdir = dset.clip_set.movement_theta / 360 * 2 * np.pi - np.pi
@@ -1942,14 +2001,14 @@ def compute():
         tod_c = circular(tod, data_type='tod', met_cap=.93)
         # tod_c.plot_samples(data_type='tod', bins=50)
         # tod_c.plot_bic()
-        tod_c.save(file=FILE_PDF, tag='DATIME', region=i)
+        tod_c.save(file=FILE_PDF, tag='DATIME', region=r)
 
 # 14. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
         doy_c = circular(doy, data_type='doy', met_cap=.83)
         # doy_c.plot_samples(data_type='doy', bins=20)
         # doy_c.plot_bic()
-        doy_c.save(file=FILE_PDF, tag='DOYEAR', region=i)
+        doy_c.save(file=FILE_PDF, tag='DOYEAR', region=r)
 
 
 # %% main

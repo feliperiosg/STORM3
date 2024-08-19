@@ -64,6 +64,7 @@ carried out here.
 PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
 ZON_FILE = './model_input/regions.shp'  # nK regions file
 SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
+SHP_FILE = './model_input/KC_regions.shp' # regions.by.Katherine.Cocking (WGS84)
 DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
 # DEM_FILE = None
 OUT_PATH = './model_output'                             # output folder
