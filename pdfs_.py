@@ -47,9 +47,9 @@ parent_d = dirname(__file__)  # otherwise, will append the path.of.the.tests
 # parent_d = './'  # to be used in IPython
 
 # # https://stackoverflow.com/a/20627316/5885810
-# pd.options.mode.chained_assignment = None  # default='warn'
-# pd.set_option('display.max_columns', None)
-# pd.set_option('display.width', 1000)
+pd.options.mode.chained_assignment = None  # default='warn'
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 1000)
 tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 
@@ -58,8 +58,6 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 # EVENT_DATA = './model_input/0326_collect_MAM_track_hadIMERG_.nc'
 EVENT_DATA = './model_input/0326_collect_OND_track_hadIMERG_.nc'
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
-
-OWN_MASK = './model_input/KC_regions.shp'
 
 # # parameters imported from "parameters.py"
 
@@ -134,6 +132,8 @@ class masking:
         # https://gis.stackexchange.com/a/328276/127894  (geo series into gpd)
         # wtrshd = wtrwgs.to_crs(epsg=42106)  # this code does NOT work!
         wtrshd = wtrwgs.to_crs(crs=self.wkt_prj)  # //epsg.io/42106.wkt
+        # doing buffer in splitted.conjoined pols is complicated; so avoid such
+        self.buffer = 0. if len(wtrshd) > 1 else self.buffer
         BUFFRX = GeoDataFrame(geometry=wtrshd.buffer(self.buffer))
         BUFFRX['burn'] = np.arange(1, len(BUFFRX) + 1)
         # infering (and rounding) the limits of the buffer-zone
@@ -416,8 +416,10 @@ class regional:
 
         reg_tag = np.unique(LAB)
         reg_tag = reg_tag[~np.isnan(reg_tag)]
-        kcentr = [np.array([eval(f'np.nan{statistic}(reg[LAB == {x}])')]) for x
-                  in reg_tag]
+        kcentr = []
+        for x in reg_tag:
+        # eval don't work inside class:  https://stackoverflow.com/a/61498252/5885810
+            kcentr.append(np.array([eval(f'np.nan{statistic}(reg[LAB == {x}])')]))
         KAT = list(map(str, reg_tag.astype('u2')))
 
         return LAB, dict(zip(KAT, kcentr))
@@ -578,6 +580,7 @@ class regional:
         # masks.geometry.loc[0]
         # masks.loc[0].geometry
         # masks.geometry.xs(0)
+        masks['area_m'] = masks.area
 
         # project to WGS84
         wasks = masks.to_crs(crs='EPSG:4326')
@@ -1554,6 +1557,14 @@ class fit_pdf:
             'ksone', 'kstwobign', 'mielke', 'ncx2', 'ncf', 'norminvgauss',
             # 'foldcauchy',
             ]
+        # seasonal/totals [more-less]
+        self._f_lskm = [
+            'anglit', 'argus', 'burr12', 'chi', 'cosine', 'crystalball',
+            'genlogistic', 'gumbel_l', 'johnsonsu', 'levy_l', 'levy_stable',
+            'loggamma', 'powernorm', 'weibull_max',
+            # 'genhyperbolic', 'foldnorm', 'exponpow',
+            # 'laplace_asymmetric', 'gausshyper', 'genhalflogistic',
+            ]
         # duration & velocity & area (more not-symmetric, less right-skewed)
         self._f_nsym = [
             'alpha', 'betaprime', 'fisk', 'f', 'gamma', 'genextreme',
@@ -1566,9 +1577,9 @@ class fit_pdf:
         # betas
         self._f_norm = [
             'anglit', 'burr', 'chi', 'chi2', 'cosine', 'exponweib', 'hypsecant',
-            'jf_skew_t', 'johnsonsb', 'logistic', 'maxwell', 'nakagami', 'ncx2',
+            'jf_skew_t', 'johnsonsb', 'logistic', 'maxwell', 'ncx2',
             'nct', 'norm', 'powerlognorm', 'powernorm', 't', 'weibull_max',
-            # 'norminvgauss',
+            # 'nakagami', 'norminvgauss',
             ]
         # exponential-like (decrease) distros
         self._f_expn = [
@@ -1581,13 +1592,13 @@ class fit_pdf:
             isinstance(np.random.choice(family), str):
             self.family = family
         elif isinstance(family, str) and family in\
-            ['rskm', 'nsym', 'norm', 'expn']:
+            ['rskm', 'lskm', 'nsym', 'norm', 'expn']:
             self.family = eval(f'self._f_{family}')
         else:
             raise AssertionError(
                 f'WRONG INPUT TYPE!\n'
                 f'family must be a list of scipy-pdf families or one of the '
-                f'following strings "rskm", "nsym", "norm" or "expn".'
+                f'following strings "rskm", "lskm", "nsym", "norm" or "expn".'
                 )
         self.data = data
         self.group = self.e_group(self.data)
@@ -1711,7 +1722,7 @@ class fit_pdf:
         # plt.show()
 
 
-# %% discrete
+# %% discrete xtras
 
 class discrete:
 
@@ -1840,28 +1851,60 @@ class discrete:
     #                     facecolor=fig.get_facecolor())
 
 
+def totals(set_tot, area_km):  # set_tot=fset.clip_set; area_km
+    # turn it into pd + stuff
+    stot = betas(set_tot, method='total')
+    # now compute seasonal.totals
+    ttmp = stot.df[['area', 'pf_maxrainrate', 'rratio']]
+    ttmp['year'] = ttmp.index.get_level_values('tracks').astype(
+        str).str[:4].values.astype('u4')
+    ttmp['avg_r'] = ttmp.pf_maxrainrate / ttmp.rratio * set_tot.attrs['time_resolution_hour']
+    ttmp['total'] = ttmp.avg_r * ttmp.area / area_km
+    ttmp = ttmp.groupby(by='year').agg('sum')
+    return ttmp
+
+
+# # reading MONTHLY.IMERG (for a given season)
+# # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# from glob import glob
+
+# sdic = {'MAM': [3, 4, 5], 'OND': [10, 11, 12]}
+
+# def imorg(year):  # year=2000; year=2021
+#     flist = glob(f'../SETS/imerg_m/3B-MO*{year}*' )
+#     ix = np.in1d(list(map(lambda x: int(x.split('E235959')[1][1:3]), flist)), sdic[SEASON_TAG])
+#     flist = [value for bool_, value in zip(ix, flist) if bool_]
+#     if len(flist)!=0:
+#         imerg_mo = xr.open_mfdataset(
+#             flist, combine='nested', concat_dim='time', decode_times=True,
+#             use_cftime=True, decode_cf=True,  # data_vars=['precipitation'],
+#             mask_and_scale=True , parallel=False).transpose('time', 'lat', 'lon')
+#         daysim = imerg_mo.time.dt.days_in_month
+#         seas_rain = (imerg_mo * daysim * 24).sum(dim='time').compute()
+#         seas_rain['precipitationQualityIndex'] =\
+#             imerg_mo['precipitationQualityIndex'].mean(dim='time').compute()
+#         seas_rain.rio.write_crs(CRS('EPSG:4326'),
+#                                 grid_mapping_name='spatial_ref', inplace=True)
+#         # seas_rain.precipitation.plot(robust=True, cmap='gist_ncar')
+#         # seas_rain.precipitationQualityIndex.plot(robust=True, cmap='turbo')
+#     else:
+#         seas_rain = []
+#     return seas_rain
+
+# ilis = list(map(imorg, np.r_[2000:2022]))
+# # remove.voids.in.a.list (no tracking of voids!)
+# # https://stackoverflow.com/a/40598286/5885810
+# seasonal_monthly_imerg = xr.concat(
+#     list(filter(None, ilis)), 'time', compat='override', coords='minimal')
+
+
 # %% call all
 
 # def compute(region=None):
 #     if region=None:
 def compute():
 
-# -1. CREATE XPORTING FILE (for csv & shp)
-    FILE_PDF = abspath(join(parent_d,
-        PDF_FILE.replace('.csv', f'_{SEASON_TAG}_{NREGIONS}r.csv')
-        ))
-    FILE_ZON = abspath(join(parent_d,
-        ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{NREGIONS}r.shp')
-        ))
-    # https://www.geeksforgeeks.org/create-an-empty-file-using-python/
-    try:
-        with open(FILE_PDF, 'w'):
-            pass
-    except FileNotFoundError:
-        print(f"for some reason the path '{dirname(FILE_PDF)}' does not "\
-              'exist!!.\nplease, create such a folder... and come back.')
-
-#  0. SPLITING SHP INTO AOI
+#  1. SPLITING SHP INTO AOI
     # if reading SEASONAL.MAP with XARRAY
     seas = xr.open_dataset(
         abspath(join(parent_d, RAIN_MAP)),
@@ -1878,27 +1921,60 @@ def compute():
 
     areas = regional(rain_.field_prj, space.buffer_mask,
                      space.catchment_mask, nr=NREGIONS)
+    # update xport.shp.file name & xport it
+    FILE_ZON = abspath(join(parent_d,
+        ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{areas.n_}r.shp')
+        ))
     areas.xport_shp(file=FILE_ZON)
 
-#  1. READ TRACK.DATA
+#  2. CREATE XPORTING FILE (for csv & shp)
+    FILE_PDF = abspath(join(parent_d,
+        PDF_FILE.replace('.csv', f'_{SEASON_TAG}_{areas.n_}r.csv')
+        ))
+    # https://www.geeksforgeeks.org/create-an-empty-file-using-python/
+    try:
+        with open(FILE_PDF, 'w'):
+            pass
+    except FileNotFoundError:
+        print(f"for some reason the path '{dirname(FILE_PDF)}' does not "\
+              'exist!!.\nplease, create such a folder... and come back.')
+
+#  3. READ TRACK.DATA
     dzet = xr.open_dataset(abspath(join(parent_d, EVENT_DATA)),
                            chunked_array_type='dask', chunks='auto')
 
     # for i, r in enumerate(areas.gshape.region):
-    for i, r in enumerate(tqdm(areas.gshape.region, ncols=50)):
+    for i, r in enumerate(tqdm(areas.gshape.region, ncols=50)):  # i=0
 
-#  2. DEFINE THE AREA OF ANALYSIS
+#  4. DEFINE THE AREA OF ANALYSIS
         # one_area = region()  # if.doing.the.whole.area (also?)
         one_area = region(shp=areas.gshape.iloc[[i]])
-        # areas.gshape.iloc[[0]].geometry.xs(0)     # plotting
-        # one_area.region.geometry.xs(0)            # plotting
+        # areas.gshape.iloc[[i]].geometry.xs(i)     # plotting
+        # one_area.region.geometry.xs(i)            # plotting
         print(f'\n{one_area.region}')
 
-#  3. CLIP TRACK.DATA to A.O.I
+#  5. CAPTURING TOTALS
+        fset = clipping(dzet, one_area.region, lf=.0)
+        tots = totals(fset.clip_set, (one_area.region.area_m / 1e6).values)
+        # tots.total.mean()  # tots.total.values
+
+        # # checking against IMERG_monthly
+        # # first run "seasonal_monthly_imerg" in [discrete xtras]
+        # mo_clip = seasonal_monthly_imerg.rio.clip(one_area.region.geometry,)
+        # # mo_clip.precipitation[0,:].plot(cmap='turbo')
+        # avgs = mo_clip.precipitation.sum(dim=('lat', 'lon')) / mo_clip.precipitation.count(dim=('lat', 'lon'))
+        # avgs.mean().data  # avgs.data
+
+        fit_tot = fit_pdf(tots.total, family='lskm',)
+        # fit_tot = fit_pdf(tots.total, family='norm',)
+        fit_tot.save(file=FILE_PDF, tag='TOTALP_PDF', region=r)
+        # fit_tot.plot()
+
+#  6. CLIP (again) TRACK.DATA to A.O.I (with STORMS having at.least 80% of LF)
         dset = clipping(dzet, one_area.region, lf=.8)
         # dset.plot()  # dset.plot(file='p01.png')
 
-#  4. FIT DURATION (1st ??)
+#  7. FIT DURATION
         dur = (dset.clip_set.track_duration *
                dset.clip_set.attrs['time_resolution_hour']).load()
         # plt.hist(dur, bins=29)
@@ -1912,13 +1988,13 @@ def compute():
         # fit_dur.pdf
         # fit_dur.plot()
 
-#  5. PANDAS (containing all the rest vars)
+#  8. PANDAS (containing all the rest vars)
         # ALTERNATIVE 1: stats based on TOTALS (plus RRATIO)
         all_vars = betas(dset.clip_set, method='total')
         # all_vars.df
 
         if ALTERNATIV == 1:
-    #  6. FIT MAXINTENSITY
+    # 11. FIT MAXINTENSITY
             fit_int = fit_pdf(all_vars.df.pf_maxrainrate, family='rskm',)
             fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=r)
             # fit_int.pdf
@@ -1927,7 +2003,7 @@ def compute():
             # # if doing log-transform
             # fit_int = fit_pdf(np.log(all_vars.df.pf_maxrainrate), family='norm',)
 
-    #  7. FIT DECAY (very optional in ALTERNATIV 2)
+    # 12. FIT DECAY (very optional in ALTERNATIV 2)
             fit_dec = fit_pdf(all_vars.df.beta, family='norm',)
             fit_dec.save(file=FILE_PDF, tag='BETPAR_PDF', region=r)
             # fit_dec.plot()
@@ -1935,7 +2011,7 @@ def compute():
             # fit_dec.group.iloc[0][0].summary()
 
         elif ALTERNATIV == 2:
-    #  6. FIT SOME COPULA ('max_intensity', 'mm_ratio')
+    #  9. FIT SOME COPULA ('max_intensity', 'mm_ratio')
             cop_one = copulas(all_vars.df, ('max_intensity', 'mm_ratio'),
                               method='total', xy_b=dset.clip_set)
             # cop_one.rhos  # cop_one.z
@@ -1943,16 +2019,16 @@ def compute():
             # cop_one.plot(marker='x', color='xkcd:cool green')
             cop_one.save(file=FILE_PDF, tag='COPONE_RHO', region=r)
 
-    #  7. NEW E FRAME
+    # 10. NEW E FRAME
             all_vars_e = all_vars.df.merge(cop_one.z, left_index=True, right_index=True,)
 
-    #  8. FIT MAXINTENSITY
+    # 11. FIT MAXINTENSITY
             fit_int = fit_pdf(all_vars_e[['max_intensity', 'E']], e_col='E', family='rskm',)
             fit_int.save(file=FILE_PDF, tag='MAXINT_PDF', region=r)
             # fit_int.pdf
             # fit_int.plot()
 
-    #  9. FIT RRATIO (very optional in ALTERNATIV 1)
+    # 13. FIT RRATIO (very optional in ALTERNATIV 1)
             fit_rat = fit_pdf(all_vars_e[['rratio', 'E']], e_col='E', family='rskm',)
             fit_rat.save(file=FILE_PDF, tag='INTRAT_PDF', region=r)
             # fit_rat.plot(bins=51, xlim=(-1,41))
@@ -1960,7 +2036,7 @@ def compute():
         else:
             raise TypeError("wrong ALTERNATIV parameter passed!.")
 
-# 10. FIT RADII
+# 14. FIT RADII
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
         fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=r)
         # fit_rad.plot()
@@ -1969,7 +2045,7 @@ def compute():
         # fit_are = fit_pdf(all_vars.df.area, family='nsym',)
         # fit_are.plot()
 
-# 11. FIT VELOCITY (in m/s)
+# 15. FIT VELOCITY (in m/s)
         fit_vel = fit_pdf(all_vars.df.velocity, family='norm',)
         fit_vel.save(file=FILE_PDF, tag='VELMOV_PDF', region=r)
         # fit_vel.plot(bins=51, xlim=(-11, 41), N=5)
@@ -1978,7 +2054,7 @@ def compute():
         # vel = all_vars.df.velocity[all_vars.df.velocity > 0.01]
         # fit_vel = fit_pdf(vel, family='nsym',)
 
-# 12. DIRECTION [CIRCULAR]
+# 16. DIRECTION [CIRCULAR]
         # track-based
         mdir = dset.clip_set.movement_theta / 360 * 2 * np.pi - np.pi
         mdir_rad = xr.apply_ufunc(one_vm, mdir, dask='parallelized'#'allowed'
@@ -1995,7 +2071,7 @@ def compute():
         # mdir_rad = mdir.dropna(dim='t_n', how='all').compute().data
         # dir_c = circular(mdir_rad, data_type='rad', met_cap=.7)
 
-# 13. TIME of DAY [CIRCULAR]
+# 17. TIME of DAY [CIRCULAR]
         tod = dset.clip_set.start_basetime.load()
         tod = (tod.dt.hour + tod.dt.minute / 60 + tod.dt.second / 3600).data
         tod_c = circular(tod, data_type='tod', met_cap=.93)
@@ -2003,7 +2079,7 @@ def compute():
         # tod_c.plot_bic()
         tod_c.save(file=FILE_PDF, tag='DATIME', region=r)
 
-# 14. DAY of YEAR [CIRCULAR]
+# 18. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
         doy_c = circular(doy, data_type='doy', met_cap=.83)
         # doy_c.plot_samples(data_type='doy', bins=20)
