@@ -32,6 +32,9 @@ filterwarnings('ignore', message='You will likely lose important projection '
 # because the "EPSG_CODE = 42106" is not a standard proj?
 filterwarnings('ignore', message="GeoDataFrame's CRS is not "
                "representable in URN OGC format")
+# GDAL misleading warning  [https://stackoverflow.com/a/9134842/5885810]
+filterwarnings('ignore', message="^.*not successfully written. Possibly due to "
+               "too larger number with respect to field width.*$")
 # https://stackoverflow.com/a/41126025/5885810  because 'decode_cf=True' (xarray)
 simplefilter('ignore', category=UserWarning)
 
@@ -600,8 +603,10 @@ class regional:
         return dict(zip(zone, new_))
 
     def xport_shp(self, **kwargs):
+        drvr = kwargs.get('driver', 'ESRI Shapefile')
+        lyr = kwargs.get('layer', None)
         prnt = kwargs.get('file', ZON_FILE)
-        self.gshape.to_file(prnt, driver='ESRI Shapefile')
+        self.gshape.to_file(prnt, driver=drvr, layer=lyr)
         return
 
 
@@ -1926,6 +1931,7 @@ def compute():
         ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{areas.n_}r.shp')
         ))
     areas.xport_shp(file=FILE_ZON)
+    # areas.xport_shp(file=FILE_ZON.replace('.shp', '.gpkg'), driver='GPKG', layer='rrain')
 
 #  2. CREATE XPORTING FILE (for csv & shp)
     FILE_PDF = abspath(join(parent_d,
