@@ -1439,7 +1439,7 @@ class copulas:
                         facecolor=fig.get_facecolor())
 
 
-# %% decay
+# %% d e c a y
 
 class betas:
 
@@ -1535,7 +1535,7 @@ class betas:
         return l_, i_
 
 
-# %% fit pdfs
+# %% pdfitting
 
 class fit_pdf:
 
@@ -1856,17 +1856,18 @@ class discrete:
     #                     facecolor=fig.get_facecolor())
 
 
-def totals(set_tot, area_km):  # set_tot=fset.clip_set; area_km
-    # turn it into pd + stuff
+def totals(set_tot, area_km):
+    # set_tot=fset.clip_set
+    # area_km=(one_area.region.area_m / 1e6).values; area_km=npix
     stot = betas(set_tot, method='total')
     # now compute seasonal.totals
     ttmp = stot.df[['area', 'pf_maxrainrate', 'rratio']]
     ttmp['year'] = ttmp.index.get_level_values('tracks').astype(
         str).str[:4].values.astype('u4')
     ttmp['avg_r'] = ttmp.pf_maxrainrate / ttmp.rratio * set_tot.attrs['time_resolution_hour']
-    ttmp['total'] = ttmp.avg_r * ttmp.area / area_km
-    ttmp = ttmp.groupby(by='year').agg('sum')
-    return ttmp
+    # ttmp['total'] = ttmp.avg_r * ttmp.area / area_km  # in km2
+    ttmp['total'] = ttmp.avg_r * ttmp.area / (X_RES * Y_RES / 1e6) / area_km  # in pxls
+    return ttmp.groupby(by='year').agg('sum')
 
 
 # # reading MONTHLY.IMERG (for a given season)
@@ -1961,7 +1962,9 @@ def compute():
 
 #  5. CAPTURING TOTALS
         fset = clipping(dzet, one_area.region, lf=.0)
-        tots = totals(fset.clip_set, (one_area.region.area_m / 1e6).values)
+        npix = areas.regions[areas.regions == int(list(areas.nr_dic.keys())[i])].size
+        # tots = totals(fset.clip_set, (one_area.region.area_m / 1e6).values)
+        tots = totals(fset.clip_set, npix)
         # tots.total.mean()  # tots.total.values
 
         # # checking against IMERG_monthly
