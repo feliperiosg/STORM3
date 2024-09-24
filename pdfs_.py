@@ -109,26 +109,78 @@ ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 class masking:
 
     def __init__(self, **kwargs):
+        """
+        reads catchment-SHP, buffers it, and burns them into 2D-numpy.\n
+        Input: none.\n
+        **kwargs\n
+        catchment: shp; shapefile.
+        wkt_prj: char; WKT (well-known text) of the local CRS.
+        buffer: float; buffer (in meters) to expand the shapefile.
+        x_res: float; spatial resolution (in meters) along the X-dimension.
+        y_res: float; spatial resolution (in meters) along the Y-dimension.
+        initValues: int/float; default value to pre-empt the raster (with).
+        burn_tag: char; geoPandas.GeoDataFrame column used as burning values.\n
+        Output -> a class having the buffer & catchment rasters.
+        """
 
         self.catch_shp = kwargs.get('catchment', SHP_FILE)
         self.wkt_prj = kwargs.get('wkt_prj', WKT_OGC)
         self.buffer = kwargs.get('buffer', BUFFER)
         self.x_res = kwargs.get('x_res', X_RES)
         self.y_res = kwargs.get('y_res', Y_RES)
+        self.seed_val = kwargs.get('initValues', 0)
+        self.burn_tag = kwargs.get('burn_tag', 'burn')
         self.bbbox = None
         self.buffer_mask, self.catchment_mask = self.masks()
         self.xs, self.ys = self.coords(self.bbbox)
 
-    def coords(self, bbox):
-        # define coords of the XY.AXES
-        XS, YS = list(map(lambda a, b, c: np.arange(a + c / 2, b + c / 2, c),
-                          [bbox['l'], bbox['b']], [bbox['r'], bbox['t']],
-                          [self.x_res, self.y_res]))
-        # flip YS??: so rasters are compatible with numpys
-        YS = np.flipud(YS)
-        return XS, YS
+    @staticmethod
+    def shapsterize(jeometry, x_res, y_res, zero, burn_tag, limits, out_crs,
+                    **kwargs):
+        """
+        burn a shp/geopandas.GeoDataFrame into a raster/2D-numpy.\n
+        Input ->
+        *jeometry* : str; representing a JSON (from geopandas.GeoDataFrame).
+        *x_res* : float; spatial resolution (in meters) along the X-dimension.
+        *y_res* : float; spatial resolution (in meters) along the Y-dimension.
+        *zero* : int/float; default value to pre-empt the raster (with).
+        *burn_tag* : char; geoPandas.GeoDataFrame column used as burning values.
+        *limits* : list; float limits in the order: 'l', 'b', 'r', 't'
+        *out_crs* : char; PROJ4 string of output's CRS.\n
+        **kwargs ->
+        name : char; the path to raster's location (ending in ".tif").
+        format : char; output format ('MEM' for inMemory; 'GTiff'...).
+        out_type : int?; gdal.object specifying the output bit-size.\n
+        Output -> numpy; 2D-numpy (or '.tif' file).
+        """
+        r_name = kwargs.get('name', '')
+        f_rmat = kwargs.get('format', 'MEM')
+        out_type = kwargs.get('outputType', gdal.GDT_Int16)
+
+        tmp = gdal.Rasterize(
+            # 'tmp-raster_mask-buff.tif', jeometry, format='GTiff',  # (in TIFF)
+            r_name, jeometry, format=f_rmat,  # (in MEMORY)
+            xRes=x_res, yRes=y_res,
+            # initValues=zero, burnValues=1,  # add=0, noData=0,
+            initValues=zero, attribute=burn_tag, allTouched=True,
+            outputType=out_type, outputBounds=limits, targetAlignedPixels=True,
+            # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap
+            # targetAlignedPixels=False,
+            # UPDATE needed for outputSRS [in WKT instead of PROJ4]
+            outputSRS=out_crs,
+            # width=(abs(limits[2] - limits[0]) / x_res).astype('u2'),
+            # height=(abs(limits[3] - limits[1]) / y_res).astype('u2'),
+            )
+        burnt = tmp.ReadAsArray()  # .astype('i1')
+        tmp = None
+        return burnt
 
     def masks(self,):
+        """
+        define coordinates of the X and Y axes.\n
+        Input: none.\n
+        Output -> tuple; 2D-numpy(s) having the buffer & catchment rasters.
+        """
         # read WG-catchment shapefile (assumed to be in WGS84)
         wtrwgs = read_file(abspath(join(parent_d, self.catch_shp)))
         # transform it into EPSG:42106 & make the buffer
@@ -138,34 +190,23 @@ class masking:
         # doing buffer in splitted.conjoined pols is complicated; so avoid such
         self.buffer = 0. if len(wtrshd) > 1 else self.buffer
         BUFFRX = GeoDataFrame(geometry=wtrshd.buffer(self.buffer))
-        BUFFRX['burn'] = np.arange(1, len(BUFFRX) + 1)
+        BUFFRX[self.burn_tag] = np.arange(1, len(BUFFRX) + 1)
         # infering (and rounding) the limits of the buffer-zone
-        llim = np.floor(BUFFRX.bounds.minx.min() / self.x_res) * self.x_res
-        rlim = np.ceil(BUFFRX.bounds.maxx.max() / self.x_res) * self.x_res
-        blim = np.floor(BUFFRX.bounds.miny.min() / self.y_res) * self.y_res
-        tlim = np.ceil(BUFFRX.bounds.maxy.max() / self.y_res) * self.y_res
-        self.bbbox = {'l': llim, 'r': rlim, 'b': blim, 't': tlim}
+        self.bbbox = {
+            'l': np.floor(BUFFRX.bounds.minx.min() / self.x_res) * self.x_res,
+            'r': np.ceil(BUFFRX.bounds.maxx.max() / self.x_res) * self.x_res,
+            'b': np.floor(BUFFRX.bounds.miny.min() / self.y_res) * self.y_res,
+            't': np.ceil(BUFFRX.bounds.maxy.max() / self.y_res) * self.y_res,
+            }
+        # re-arranging the BBOX differently
+        sort_bbox = [self.bbbox[i] for i in ['l', 'b', 'r', 't']]
+        out_proj4 = CRS.from_wkt(self.wkt_prj).to_proj4()
 
-        tmp = gdal.Rasterize(
-            # # ACTIVATE if IN.TIFF
-            #     'tmp-raster_mask-buff.tif', BUFFRX.to_json(), format='GTiff',
-            # ACTIVATE if IN.MEMORY
-            '', BUFFRX.to_json(), format='MEM',
-            # xRes=self.x_res, yRes=self.y_res, noData=0, attribute=burnValues=1,
-            xRes=self.x_res, yRes=self.y_res, noData=0, attribute='burn',
-            # add=0,
-            allTouched=True, outputType=gdal.GDT_Int16,
-            outputBounds=[llim, blim, rlim, tlim],
-            targetAlignedPixels=True,
-            # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap
-            # targetAlignedPixels=False,
-            # UPDATE needed for outputSRS [in WKT instead of PROJ4]
-            outputSRS=CRS.from_wkt(self.wkt_prj).to_proj4(),
-            # width=(abs(rlim-llim) / self.x_res).astype('u2'),
-            # height=(abs(tlim-blim) / self.y_res).astype('u2')
+        # BURN THE BUFFER SHP INTO RASTER
+        BUFFRX_MASK = masking.shapsterize(
+            BUFFRX.to_json(), self.x_res, self.y_res, self.seed_val,
+            self.burn_tag, sort_bbox, out_proj4,
             )
-        BUFFRX_MASK = tmp.ReadAsArray().astype('u1')
-        tmp = None
 
         # # xport it as NUMPY
         # np.save('tmp-raster_mask-buff', BUFFRX_MASK.astype('u1'),
@@ -179,11 +220,7 @@ class masking:
         # with open('tmp-raster_mask-buff.pkl', 'rb') as db_file:
         #     db_pkl = pickle.load(db_file)
 
-        # # some PLOTTING
-        # import matplotlib.pyplot as plt
-        # plt.imshow(BUFFRX_MASK, interpolation='none')
-        # plt.show()
-        # # OR
+        # # some (none matplotlib) PLOTTING
         # from rasterio.plot import show
         # from rasterio import open as ropen
         # tmp_file = 'tmp-raster.tif'
@@ -202,43 +239,24 @@ class masking:
         # #     print('file is not stored with north up')
 
         # BURN THE CATCHMENT SHP INTO RASTER (WITHOUT BUFFER EXTENSION)
+        CATCHMENT_MASK = masking.shapsterize(
+            wtrshd.to_json(), self.x_res, self.y_res, self.seed_val,
+            'BASIN_ID', sort_bbox, out_proj4,
+            )
         # https://stackoverflow.com/a/47551616/5885810  (idx polygons intersect)
         # https://gdal.org/programs/gdal_rasterize.html
         # https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
         # https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
         # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
-        tmp = gdal.Rasterize(
-            '', wtrshd.to_json(), format='MEM',
-            xRes=self.x_res, yRes=self.y_res, noData=0, burnValues=1,
-            add=0,
-            allTouched=True, outputType=gdal.GDT_Int16,
-            outputBounds=[llim, blim, rlim, tlim],
-            targetAlignedPixels=True,
-            # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap
-            # targetAlignedPixels=False,
-            # UPDATE needed for outputSRS [in WKT instead of PROJ4]
-            outputSRS=CRS.from_wkt(self.wkt_prj).to_proj4(),
-            # width=(abs(rlim-llim) / self.x_res).astype('u2'),
-            # height=(abs(tlim-blim) / self.y_res).astype('u2')
-            )
-        CATCHMENT_MASK = tmp.ReadAsArray().astype('u1')
-        tmp = None  # flushing!
 
-        # # some more PLOTTING
-        # import matplotlib.pyplot as plt
-        # plt.imshow(CATCHMENT_MASK, interpolation='none', aspect='equal',
-        #            origin='upper', cmap='nipy_spectral_r',
-        #            extent=(llim, rlim, blim, tlim))
-        # plt.show()
         # # if xporting the.mask as ASCII
         # # CORRECT.way (as it registers what is NODATA)
         # tmp = gdal.Rasterize(
-        #     '', wtrshd.to_json(), format='MEM', xRes=self.x_res, yRes=self.y_res,
-        #     # add=0
+        #     '', wtrshd.to_json(), format='MEM',
+        #     xRes=self.x_res, yRes=self.y_res,  # add=0,
         #     allTouched=True, initValues=-9999., burnValues=1., noData=-9999.,
         #     outputType=gdal.GDT_Float32, targetAlignedPixels=True,
-        #     outputBounds=[llim, blim, rlim, tlim],
-        #     outputSRS=CRS.from_wkt(self.wkt_prj).to_proj4()
+        #     outputBounds=sort_bbox, out_proj4,
         #     )
         # # CATCHMENT_MASK = tmp.ReadAsArray()
         # tmv_file = 'tmp-raster_mask.asc'
@@ -260,6 +278,48 @@ class masking:
         #     db_pkl = pickle.load(db_file)
 
         return BUFFRX_MASK, CATCHMENT_MASK
+
+    def coords(self, bbox):
+        """
+        define coordinates of the X and Y axes.\n
+        Input ->
+        *bbox* : dict; dictionary wiht the bounding.box limits {l, r, b, t}.\n
+        Output -> tuple; 1D-numpy with local coordinates.
+        """
+        # define coords of the XY.AXES
+        XS, YS = list(map(lambda a, b, c: np.arange(a + c / 2, b + c / 2, c),
+                          [bbox['l'], bbox['b']], [bbox['r'], bbox['t']],
+                          [self.x_res, self.y_res]))
+        # flip YS??: so rasters are compatible with numpys
+        YS = np.flipud(YS)
+        return XS, YS
+
+    def plot(self, **kwargs):
+        prnt = kwargs.get('file', None)
+        texc = kwargs.get('text_color', 'xkcd:acid green')
+    # plot
+        fig = plt.figure(figsize=(8.1, 4), dpi=150)
+        # fig.subplots_adjust(left=.1, right=.1, bottom=.1, top=.1, wspace=.3)
+    # plot 1: buffer
+        ax = fig.add_subplot(121)
+        plt.imshow(self.buffer_mask, interpolation='none', aspect='equal',
+                   origin='upper', cmap='inferno',)
+        ax.text(0.04, 0.96, 'buffer', ha='left', va='top', color=texc,
+                transform=ax.transAxes,)
+        # ax.set_xlabel('grid_cells')
+        # ax.set_ylabel('grid_cells')
+    # plot 1: catchment
+        ax = fig.add_subplot(122)
+        plt.imshow(
+            self.catchment_mask, interpolation='none', aspect='equal',
+            origin='upper', cmap='cividis', extent=tuple(self.bbbox.values()),
+            )
+        ax.text(0.04, 0.96, 'catchment', ha='left', va='top', color=texc,
+                transform=ax.transAxes,)
+    # show
+        plt.show() if not prnt else\
+            plt.savefig(prnt, bbox_inches='tight', pad_inches=0.01,
+                        facecolor=fig.get_facecolor())
 
 
 class field:
@@ -365,7 +425,7 @@ class regional:
         self.realization = map_prj
         self.buffer = mask_bfr
         self.catchment = mask_cat
-        if np.in1d(self.buffer, np.array([0, 1])).all():
+        if np.isin(self.buffer, np.array([0, 1])).all():
             # this means there are NO.partitions/regions in buffer!
             self.regions, self.nr_dic = self.k_regions(
                 self.realization, self.catchment, self.n_)
@@ -381,12 +441,6 @@ class regional:
             self.morph = None
             self.gshape = self.to_shp(self.regions, self.realization, self.buffer,
                                       self.catchment, self.wkt_prj)
-
-        # test = regional(rain_.field_prj, space.buffer_mask, space.catchment_mask,  nr=4)
-        # test.nr_dic
-        # plt.imshow(test.regions, cmap='turbo', interpolation='none'); plt.colorbar()
-        # plt.imshow(test.morph, cmap='turbo', interpolation='none'); plt.colorbar()
-        # test.up_dic
 
     def n_regions(self, r_eal, catch, buff, statistic):
         """
@@ -1071,7 +1125,7 @@ class circular:
     # reading/assigning kwargs
         prnt = kwargs.get('file', None)
         M_best = self.model_0
-        X = self.data
+        XD = self.data
         N = np.arange(1, self.max_mix + 1)
         AIC = list(self._criteria['AIC'].values())
         BIC = list(self._criteria['BIC'].values())
@@ -1080,11 +1134,11 @@ class circular:
         fig.subplots_adjust(left=0.1, right=0.8, bottom=0.2, top=0.8, wspace=0.3)
     # plot 1: data + best-fit mixture
         ax = fig.add_subplot(131)
-        xlim = np.abs(np.r_[np.floor(X.min()), np.ceil(X.max())]).max()
+        xlim = np.abs(np.r_[np.floor(XD.min()), np.ceil(XD.max())]).max()
         x = np.linspace(-xlim, xlim, 1000)
         responsibilities, pdf = circular.compute_probs(M_best, x.reshape(-1, 1))
         pdf_individual = responsibilities * pdf[:, np.newaxis]
-        ax.hist(X, 30, density=True, histtype='stepfilled', alpha=0.4)
+        ax.hist(XD, 30, density=True, histtype='stepfilled', alpha=0.4)
         ax.plot(x, pdf, '-k')
         ax.plot(x, pdf_individual, '--k')
         ax.text(0.04, 0.96, 'Best-fit\nmixture', ha='left', va='top',
@@ -1293,7 +1347,7 @@ class copulas:
 
     def __init__(self, cset, pair, method, **kwargs):
         """
-        computes bi-variate copluas.\n
+        computes bi-variate copulas.\n
         Input ->
         *cset* : xarray; clipped dataset; or pandas.
         *pair* : tuple; either ('intensity', 'duration') or ('volume', 'duration').\n
@@ -1878,7 +1932,7 @@ def totals(set_tot, area_km):
 
 # def imorg(year):  # year=2000; year=2021
 #     flist = glob(f'../SETS/imerg_m/3B-MO*{year}*' )
-#     ix = np.in1d(list(map(lambda x: int(x.split('E235959')[1][1:3]), flist)), sdic[SEASON_TAG])
+#     ix = np.isin(list(map(lambda x: int(x.split('E235959')[1][1:3]), flist)), sdic[SEASON_TAG])
 #     flist = [value for bool_, value in zip(ix, flist) if bool_]
 #     if len(flist)!=0:
 #         imerg_mo = xr.open_mfdataset(
@@ -1921,12 +1975,11 @@ def compute():
     # seas.rain.plot(cmap='gist_ncar', robust=True)
 
     # space = masking()
-    space = masking(catchment=SHP_FILE)
-    # plt.imshow(space.buffer_mask, origin='upper', interpolation='none')
+    space = masking(catchment=SHP_FILE)  # space.plot()
     rain_ = field(seas, space.xs, space.ys)
 
-    areas = regional(rain_.field_prj, space.buffer_mask,
-                     space.catchment_mask, nr=NREGIONS)
+    areas = regional(rain_.field_prj, space.buffer_mask.astype('u1'),
+                     space.catchment_mask.astype('u1'), nr=NREGIONS)
     # update xport.shp.file name & xport it
     FILE_ZON = abspath(join(parent_d,
         ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{areas.n_}r.shp')
@@ -1987,6 +2040,7 @@ def compute():
         dur = (dset.clip_set.track_duration *
                dset.clip_set.attrs['time_resolution_hour']).load()
         # plt.hist(dur, bins=29)
+        # [1.5, 81.] -> MAM; [1.5, 62.5] -> OND;
 
         # # DOES NOT WORK ON DISCRETE (because of 0.5 res
         # # ... but it works for 1.0 res -> if you find the right pars/bounds)

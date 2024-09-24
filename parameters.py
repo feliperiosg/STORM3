@@ -12,7 +12,7 @@ For an 'in-prompt' help (on these parameters) type:
     "%%python storm.py -h"  (from your Python console)
 """
 
-SEASONS = 1#1             # Number of Seasons (per Run)
+# SEASONS = 1#1             # Number of Seasons (per Run)
 NUMSIMS = 1#2         # Number of runs per Season
 NUMSIMYRS = 1#2         # Number of years per run (per Season)
 """
@@ -36,19 +36,11 @@ PTOT_SC       = [0.00]
 PTOT_SF       = [ 0.0]
 STORMINESS_SC = [-0.0]
 STORMINESS_SF = [+0.0]
-
-# # if you intend to model more than 1 SEASON, YOU CAN DO (e.g.):
-# # PARAMETER   = [ S1 ,  S2 ]
-# PTOT_SC       = [ 0. , - .0]
-# PTOT_SF       = [+0.0, -0. ]
-# STORMINESS_SC = [ 0.0, + .0]
-# STORMINESS_SF = [-0.0,  0.0]
-# ...or (e.g.):
-# # PARAMETER   = [ S1 ,  S2 ]
-# PTOT_SC       = [0.15, None]
-# PTOT_SF       = [ 0.0, None]
-# STORMINESS_SC = [-0.1, None]
-# STORMINESS_SF = [ 0.0, None]
+# # PARAMETER = [ S1 ]
+PTOT_SC       = 0.00
+PTOT_SF       = -.06
+STORMINESS_SC =  0.05
+STORMINESS_SF = +0.0
 
 
 #%% HARD-CORE PARAMETERS
@@ -85,7 +77,6 @@ NREGIONS = 4  # number of regions to split the whole.region into
 NREGIONS ==1 means no splitting at all!.
 The model still 'splits' the region into 1 big area equal to the catchment.
 """
-SEASON_TAG = 'OND'
 
 Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
 # Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
@@ -100,6 +91,8 @@ Hence, modyfing this variable without a copula (re-)analysis, for the desired/up
 bands, will still yield results!; nevertheless, such results won't be representative
 of the parametric functions/statistics found in '.../ProbabilityDensityFunctions.csv'.
 """
+
+TACTIC = 1  # the "way" STORM must be run
 
 # # EPSG:42106 is not implemented in PyProj (or anywhere else) xP
 # EPSG_CODE = 42106       # EPSG Code of the local/regular Coordinate Reference System (https://epsg.io/42106)
@@ -149,44 +142,7 @@ WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
 #         'AUTHORITY["EPSG","9122"]],'\
 #     'AUTHORITY["EPSG","4326"]]'
 
-# #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-"""
-USE ANY OF THE FOLLOWING SET OF PARAMETERS, IF USING "SHP_REGION_GRID() -> [GRID.based 1ST]"
-"""
-# # DRYP actual/current grid
-# XLLCORNER =  1319567.308750340249                       # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-# YLLCORNER = -1170429.328196450602                       # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-# X_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =      919.241896152628                       # in meters! (pxl.resolution for the 'regular/local' CRS)
-# N_X       =     2313                                    # number of cells/pxls in the X-axis
-# N_Y       =     2614                                    # number of cells/pxls in the Y-axis
-# PARAMETERS for a HAD-tight-adjusted GRID ( 5km res)
-BUFFER    =     0000.                                   # in meters! -> buffer distance (out of the HAD)
-X_RES     =     1000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-Y_RES     =     1000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-# YLLCORNER = -1165000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-# N_X       =  int(405  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
-# N_Y       =  int(464  +np.ceil(BUFFER /Y_RES)  *2)      # number of cells/pxls in the Y-axis
-# from: https://stackoverflow.com/a/62264948/5885810
-XLLCORNER =  1350000. -(-1 *(BUFFER /X_RES) //1 *-1) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-YLLCORNER = -1165000. -(-1 *(BUFFER /Y_RES) //1 *-1) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-N_X       =  int(2313  +(-1 *(BUFFER /X_RES) //1 *-1)  *2)      # number of cells/pxls in the X-axis
-N_Y       =  int(2614  +(-1 *(BUFFER /Y_RES) //1 *-1)  *2)      # number of cells/pxls in the Y-axis
-# # PARAMETERS for a HAD-tight-adjusted GRID (10km res)
-# BUFFER    =     8000.                                   # in meters! -> buffer distance (out of the HAD)
-# X_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =    10000.                                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-# XLLCORNER =  1350000. -np.ceil(BUFFER /X_RES) *X_RES    # in meters! (x.coord of the lower.left edge, i.e., not.the.pxl.center)
-# YLLCORNER = -1170000. -np.ceil(BUFFER /Y_RES) *Y_RES    # in meters! (y.coord of the lower.left edge, i.e., not.the.pxl.center)
-# N_X       =  int(203  +np.ceil(BUFFER /X_RES)  *2)      # number of cells/pxls in the X-axis
-# N_Y       =  int(233  +np.ceil(BUFFER /Y_RES)  *2)      # number of cells/pxls in the Y-axis
-# #~DRYP.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-"""
-USE ANY OF THE FOLLOWING X_Y PAIRS, IF USING "SHP_REGION() -> [BUFFER.based 1ST]"
-"""
+### GRID characterization
 BUFFER    =  7000.                      # in meters! -> buffer distance (out of the HAD)
 X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
@@ -194,7 +150,6 @@ Y_RES     =  5000.                      # in meters! (pxl.resolution for the 're
 # Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 # X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 # Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 CLOSE_DIS =  0.15                       # in km -> small circle emulating the storm centre's point/dot
 # storm minimum radius depends on spatial.resolution (for raster purposes);
@@ -232,16 +187,10 @@ from the intenstity-duration copula.
 MAXD_RAIN = 60 *2                       # in mm
 DISPERSE_ = .2                          # factor to split MAXD_RAIN into
 
-### these parameters allow to pin down a time-dimension to the storms
+SEASON_TAG = 'OND'
+# # these parameters allow to pin down a time-dimension to the storms
 # SEED_YEAR  = None                       # for your SIM/VAL to start in the current year
-SEED_YEAR = 2023                        # for your SIM/VAL to start in 2050
-### bear in mind the 'SEASONS' variable!... (when toying with 'SEASONS_MONTHS')
-# SEASONS_MONTHS = [[6,10], None]         # JUNE through OCTOBER (just ONE season)
-# # OR:
-SEASONS_MONTHS = [['mar','may'], ['oct','dec']]     # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-SEASONS_MONTHS = SEASONS_MONTHS[::-1]    # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# SEASONS_MONTHS = [[10,5], ['jul','sep']]            # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# SEASONS_MONTHS = [['may','sep'],[11,12]]            # MAY through SEP (& e.g., NOV trhough DEC)
+SEED_YEAR = 2024                        # for your SIM/VAL to start in 2050
 TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
 # # OR:
 # TIME_ZONE    = 'UTC'
@@ -271,4 +220,4 @@ TIMEINT = 'u4'                          # format for integers in TIME dimension
 TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
 TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
 # TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
-TIME_DICT_ = dict(seconds=1 ,minutes=1/60, hours=1/60**2, days=1/(60**2*24))
+TIME_DICT_ = dict(seconds=1, minutes=1/60, hours=1/60**2, days=1/(60**2*24))

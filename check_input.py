@@ -134,29 +134,20 @@ def ASSERT():
 
 #~ TRANSFORMS THE NUMERICAL INPUT OF xxx_SC/SF INTO 'READABLE' LABELS ~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def INFER_SCENARIO( stepchange, scaling_factor, tab_x, tab_sign ):
-    #stepchange=PTOT_SC; scaling_factor=PTOT_SF; tab_x=tab_ptot
-# convert input into numpy
+def INFER_SCENARIO(stepchange, scaling_factor, tab_x, tab_sign):
+    # stepchange=PTOT_SC; scaling_factor=PTOT_SF; tab_x=tab_ptot
+    # convert input into numpy
     stepchange = np.asarray(stepchange, dtype='f8')
     scaling_factor = np.asarray(scaling_factor, dtype='f8')
-# establish whether is a 0, 1, 2, or 3
-    sum_vec = np.nansum((stepchange /stepchange, 2* scaling_factor /scaling_factor),
-                        axis=0, dtype=np.int32)
-# compute signs
-    sign_ar = np.sign( np.sign( stepchange ) + np.sign( scaling_factor ) )
-# find the variables and their signs int the corresponding 'tables'
-# ...the 'for' loop is necessary as neither .isin nor .reindex can be used (negative or repeated values)
-# https://stackoverflow.com/a/51327154/5885810      (.reindex instead of .isin)
-    # str_vec = list(map( lambda A,B: f"{A}{B}", tab_x.loc[sum_vec,'Var1'].values,
-    #     tab_sign.loc[ [np.where(tab_sign.Var2==x).__getitem__(0).__getitem__(0)\
-    #         for x in sign_ar[~np.isnan(sign_ar)]]  ].Var1.values ))
-    str_vec = list(map( lambda A,B: f"{A}{B}", tab_x.loc[sum_vec,'Var1'].values,
-        np.concatenate([tab_sign.loc[tab_sign.Var2.isin([x]), 'Var1'].values\
-            for x in sign_ar[~np.isnan(sign_ar)]]) ))
-# # the above line 'works' as there are few values to look for. otherwise, faster methods are:
-# #tab_sign.loc[np.take(np.argsort(tab_sign.Var2), np.searchsorted(tab_sign.Var2[np.argsort(tab_sign.Var2)], sign_ptot)), 'Var1'].values
-# #tab_sign.loc[np.argsort(tab_sign.Var2)[np.searchsorted(tab_sign.Var2[np.argsort(tab_sign.Var2)], sign_ptot)], 'Var1'].values
-# # https://stackoverflow.com/a/8251668/5885810     (find elements in pd)
+    # establish whether is a 0, 1, 2, or 3
+    sum_vec = np.nansum(
+        (stepchange / stepchange, 2 * scaling_factor / scaling_factor),
+        axis=0, dtype=np.int32)
+    # compute signs
+    sign_ar = np.sign(np.sign(stepchange) + np.sign(scaling_factor))
+    # find the variables and their signs int the corresponding 'tables'
+    str_vec = f"{tab_x.loc[sum_vec, 'Var1']}"\
+        f"{tab_sign.loc[tab_sign.Var2.isin(sign_ar[~np.isnan(sign_ar)]), 'Var1'].iloc[0]}"
     return str_vec
 
 
@@ -164,11 +155,6 @@ def INFER_SCENARIO( stepchange, scaling_factor, tab_x, tab_sign ):
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def WELCOME():
     global PTOT_SCENARIO, STORMINESS_SCENARIO
-# tables to correlate signs & scenarios
-    tab_sign  = DataFrame({'Var1':['', '+', '-']                            ,'Var2':[0, 1,-1   ]})
-    tab_ptot  = DataFrame({'Var1':['ptotC', 'ptotS', 'ptotT', 'n/a']        ,'Var2':[0, 1, 2, 3]})
-    # tab_ptot  = DataFrame({'Var1':['ptotC', 'ptotS', 'ptotT', 'special']        ,'Var2':[0, 1, 2, 3]})
-    tab_storm = DataFrame({'Var1':['stormsC', 'stormsS', 'stormsT', 'n/a']  ,'Var2':[0, 1, 2, 3]})
     """
   'ptotC' == Stationary conditions / Control Climate
   'ptotS' == Step Change (increase/decrese) in the observed wetness
@@ -178,39 +164,32 @@ def WELCOME():
 'stormsT' == Progressive Trend (positive/negative) in the observed storminess'
     'n/a' == scenario NOT DEFINED (as both xxx_SC & xxx_SF differ from 0)
     """
-# infer scenarios
-    PTOT_SCENARIO = INFER_SCENARIO( PTOT_SC, PTOT_SF, tab_ptot, tab_sign )
-    STORMINESS_SCENARIO = INFER_SCENARIO( STORMINESS_SC, STORMINESS_SF, tab_storm, tab_sign )
-# create OUT_PATH folder (if it doen'st exist already)
-# https://stackoverflow.com/a/50110841/5885810  (create folder if exisn't)
-    # Path( OUT_PATH ).mkdir(parents=True, exist_ok=True)
-    Path( abspath( join(parent_d, OUT_PATH) ) ).mkdir(parents=True, exist_ok=True)
-# define NC.output file.names
-    NC_NAMES =  list(map( lambda a,b,c: f'{OUT_PATH}/RUN_'\
-        f'{datetime.now(tzlocal()).strftime("%y%m%dT%H%M")}_S{a+1}_{b.strip()}_'\
-        f'{c.strip()}.nc', range(SEASONS), PTOT_SCENARIO, STORMINESS_SCENARIO ))
-# print the CORE INFO
-    form_out = '".02f"'
+    # tables to correlate signs & scenarios
+    tab_sign = DataFrame({'Var1': ['', '+', '-'],
+                          'Var2': [0, 1, -1]})
+    tab_ptot = DataFrame({'Var1': ['ptotC', 'ptotS', 'ptotT', 'n/a'],
+                          'Var2': [0, 1, 2, 3]})
+    tab_storm = DataFrame({'Var1': ['stormsC', 'stormsS', 'stormsT', 'n/a'],
+                           'Var2': [0, 1, 2, 3]})
+    # infer scenarios
+    PTOT_SCENARIO = INFER_SCENARIO(PTOT_SC, PTOT_SF, tab_ptot, tab_sign)
+    STORMINESS_SCENARIO = INFER_SCENARIO(STORMINESS_SC, STORMINESS_SF,
+                                         tab_storm, tab_sign)
+    # create OUT_PATH folder (if it doen'st exist already)
+    # https://stackoverflow.com/a/50110841/5885810  (create folder if exisn't)
+    Path(abspath(join(parent_d, OUT_PATH))).mkdir(parents=True, exist_ok=True)
+    NC_NAMES = f'{OUT_PATH}/RUN_{datetime.now(tzlocal()).strftime("%y%m%dT%H%M")}'\
+        f'_{PTOT_SCENARIO}_{STORMINESS_SCENARIO}.nc'
+    # print the CORE INFO
     print('\nRUN SETTINGS')
     print('************\n')
-    print(f"Number of Seasons: {['ONE', 'TWO'][SEASONS-1]}")
     print(f'Number of Runs: {NUMSIMS}')
     print(f'Years per Run : {NUMSIMYRS}')
     for j in wet_hash.Var2:
-        # var = 'SC' if eval(f'{j}_SCENARIO').__getitem__(-2)=="S" else 'SF' # NOT ENTIRELY ACCURATE!!
-        print(f'{wet_hash[wet_hash.Var2.isin([ j ])].Var3.iloc[ 0 ]} scenarios '\
-              f'({" | ".join( [f"S{x+1}" for x in range(SEASONS)] )}):  '\
-# 8 because 'stormsT+' is the maximum length of these strings
-               f'{ " | ".join( map(eval, [f"{j}_SCENARIO[{x}].center(8," ")" for x in range(SEASONS)]) )}')
-#               f'{" | ".join([" ".join(map(eval, [ f"{j}_SCENARIO[{x}].center(8," ")", f"format(abs( {j}_{var}[{x}] ), {form_out})" ] )) for x in range(SEASONS)])}')
-# # https://stackoverflow.com/a/25559140/5885810  (string no sign)
-
-    print('\nOutput paths:')
-# https://www.delftstack.com/howto/python/python-pad-string-with-spaces/
-# https://stackoverflow.com/a/45120812/5885810  (print/create string padding)
-    print(*[( k.ljust(max(map(len, NC_NAMES)),' ') ).rjust(max(map(len, NC_NAMES))+4,' ')\
-            for k in NC_NAMES], sep='\n')
-
+        print(f'{wet_hash[wet_hash.Var2.isin([j])].Var3.iloc[0]} scenario: '
+              f'{eval(f"{j}_SCENARIO.center(8, " ")")}')
+        # 8 because 'stormsT+' is the maximum length of these strings
+    print(f'\nOutput path:\n\t{NC_NAMES}')
     return NC_NAMES
 
 
