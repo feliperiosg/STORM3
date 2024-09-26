@@ -51,15 +51,14 @@ from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 import rioxarray as rio
 
-from pointpats import random as pran
-# import libpysal as ps
-# from pointpats import PoissonPointProcess, Window#, PointPattern
-import matplotlib.pyplot as plt
+import libpysal as ps
+from pointpats import PoissonPointProcess, random, Window  # , PointPattern
 
+import matplotlib.pyplot as plt
 from chunking import CHUNK_3D
 from parameters import *
 # from realization import READ_REALIZATION, REGIONALISATION#, EMPTY_MAP
-from pdfs_ import masking, field
+from pdfs_ import circular, field, masking
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -605,116 +604,42 @@ def truncated_sampling(distro, **kwargs):
     return sample
 
 
-
-
-class scunt:
-
-    def __init__(self, shape, size):
-        """
-        performs a poisson.point.process inside a shp [fast approach].\n
-        Input ->
-        *shape* : pd.Series; pandas series with GEOMETRY.
-        *size* : int; number of point to sample.\n
-        Output -> a class random sampled (spatial) points.
-        """
-
-        self.shp_series = shape  # shape=mask_shp
-        self.size = size  # size=540#NUM_S
-        self.samples = self.rvs()
-
-    """
-    # FROM: https://stackoverflow.com/a/69630606/5885810  (random poitns in SHP)
-    This is the chosen alternative (also coming from libpysal), it's very fast.
-    It potentially also allows for some 'Clustered Point Pattern' generation,
-    throughout the methods "pran.cluster_poisson(...", for instance.
-    """
-
-    def rvs(self,):
-        """
-        random sampling.\n
-        Input: none.\n
-        Output -> np.array; 2D-numpy with X-Y (column) coordinates.
-        """
-        cents = pran.poisson(self.shp_series['geometry'], size=self.size)
-        # 22.5 ms ± 1.58 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-        return cents
-
-# 1. transform SHAPELY into PYSAL
-
-    sal_shp = ps.cg.asShape(self.shp_series['geometry'])
-    # # OR... one can create a PYSAL.POLYGON if knowing the VERTICES
-    # xs, ys = shape.geometry.exterior.coords.xy
-    # vertixs = list(zip( xs, ys ))
-    # # OR (same as above but ONE.LINER)...
-    # # https://stackoverflow.com/a/7558990/5885810     (packing as tuples/list)
-    # vertixs = list(zip( *BUFFRX.geometry.xs(0).exterior.coords.xy ))
-    # sal_shp = ps.cg.Polygon( list(zip( *BUFFRX.geometry.xs(0).exterior.coords.xy )) )
-
-# 2. transform the PYSAL into a WINDOW
-# ... '.PARTS' (along with '.VERTICES') seems to give you the vertices (so potentially you can bypass 1.?)
-    wndw_bffr = Window(sal_shp.parts)
-    # # example on 'WINDOW' if one decides to bypass PYSAL!
-    # # https://stackoverflow.com/a/34551914/5885810    (PANDAS to TUPLEs)
-    # wndw_bffr = Window( list(BUFFRX.get_coordinates().itertuples(index=False)) )
-    # # # this one (in.pple) tells PYSAL IT's ONE.WHOLE 'part' (but seems to equally work as the above line)
-    # # wndw_bffr = Window( [list(BUFFRX.get_coordinates().itertuples(index=False))] )
-
-# 3. do the spatial.random.sampling (inside the SHP)
-# simulate a Complete Spaital Randomness (CSR) process inside a SHP (NUM_S==n-points, 1==1-realization)
-# ... (maybe it'd be a good idea to compute many realizations, and then sample from them iteratively)??
-# "asPP"==True  -> generates a point pattern (pandas that can be easily visualized)
-# "asPP"==False -> generates a point series  (just a numpy)
-# "conditioning"==True  -> simulates a lamda-conditioned CSR  (variable NUM_S)
-# "conditioning"==False -> simulates a N-conditioned CSR      (exactly  NUM_S)
-
-# let's use (only) "conditioning"==True
-# !!the more REALIZATIONS and more POINTS, the slower it gets!!
-
-# #~IF POINT.PATTERN~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-    # %timeit
-    # samples = PoissonPointProcess(wndw_bffr, NUM_S, 1, conditioning=True,  asPP=True) # gives.warning
-    # # 2.49 s ± 199 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    # # 23.4 s ± 1.24 s per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    # # 4min 10s ± 4.07 s per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    # # wanna visualize the points?
-    # samples.realizations[0].plot(window=True)
-    # # return storm.centres as NUMPY
-    # CENTS = samples.realizations[0].points.to_numpy() # if only.1.realization computed
-
-# #~IF POINT.SERIES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-    # %timeit
-    samples = PoissonPointProcess(wndw_bffr, NUM_S, 1, conditioning=True,  asPP=False) # gives.warning
-    # 2.53 s ± 127 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    # # wanna visualize the points? (there's no SHP here!)
-    # PointPattern( samples.realizations[0] ).plot(window=True, hull=True, title='point series')
-    # return storm.centres as NUMPY
-    CENTS = samples.realizations[0]
-
-    return CENTS
-
-
-
-
 class scentres:
 
-    def __init__(self, shape, size):
+    def __init__(self, shape, size, **kwargs):
         """
         performs a poisson.point.process inside a shp [fast approach].\n
         Input ->
         *shape* : pd.Series; pandas series with GEOMETRY.
         *size* : int; number of point to sample.\n
+        **kwargs ->
+        realizations : int; number of realizations.
+        conditioning : bool; not exact number of *size* samples?.
+        aspp : bool; as pandas.DataFrame?.
+        out_real : int; index of the realization to output.\n
         Output -> a class random sampled (spatial) points.
         """
 
         self.shp_series = shape
         self.size = size
-        self.samples = self.rvs()
+        self.n_real = kwargs.get('realizations', 1)
+        self.condition = kwargs.get('conditioning', False)
+        self.aspp = kwargs.get('aspp', True)
+        self.what_real = kwargs.get('out_real', 0)
+        self._all_real = self.rvs()
+        self.samples = self._all_real.realizations[self.what_real] if not\
+            self.aspp else self._all_real.realizations[self.what_real].points.to_numpy()
 
     """
-    # FROM: https://stackoverflow.com/a/69630606/5885810  (random poitns in SHP)
-    This is the chosen alternative (also coming from libpysal), it's very fast.
-    It potentially also allows for some 'Clustered Point Pattern' generation,
-    throughout the methods "pran.cluster_poisson(...", for instance.
+    spatial.random.sampling (inside the SHP)
+    simulate a Complete Spatial Randomness (CSR) process inside a SHP.
+    (maybe it'd be a good idea to compute many realizations, and then
+     sample from them iteratively)?
+    "asPP"==True  -> generates a point pattern pandas (easy visualization)
+    "asPP"==False -> generates a point series numpy
+    "conditioning"==True  -> simulates a lamda-conditioned CSR  (variable SIZE)
+    "conditioning"==False -> simulates a N-conditioned CSR      (exactly  SIZE)
+    !!the more REALIZATIONS and more POINTS, the slower it gets!!
     """
 
     def rvs(self,):
@@ -723,9 +648,25 @@ class scentres:
         Input: none.\n
         Output -> np.array; 2D-numpy with X-Y (column) coordinates.
         """
-        cents = pran.poisson(self.shp_series['geometry'], size=self.size)
-        # 22.5 ms ± 1.58 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-        return cents
+        # transform SHAPELY into PYSAL
+        tmp = [np.array(
+            self.shp_series['geometry'].geoms[i].exterior.coords.xy).T.tolist()
+            for i in range(len(self.shp_series['geometry'].geoms))]
+        sal_shp = ps.cg.Polygon(tmp)
+        # (sal_shp.len, sal_shp.holes)
+        # transform the PYSAL into a WINDOW
+        wndw_bffr = Window(sal_shp.parts)
+
+        samples = PoissonPointProcess(
+            window=wndw_bffr, n=self.size, samples=self.n_real,
+            conditioning=self.condition, asPP=self.aspp
+            )
+        # # 565 ms ± 27.7 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+        # # visualization
+        # samples.realizations[0].plot(window=True, title='point pattern')  # if asPP=True
+        # PointPattern(samples.realizations[0]).plot(window=False, hull=False,
+        #                                            title='point series')  # if asPP=False
+        return samples
 
     def plot(self, **kwargs):
         prnt = kwargs.get('file', None)
@@ -759,6 +700,28 @@ class scentres:
                         facecolor=fig.get_facecolor())
 
 
+class scentros:
+
+    def __init__(self, shape, size):
+        """
+        performs a poisson.point.process inside a shp [slow approach].\n
+        Input ->
+        *shape* : pd.Series; pandas series with GEOMETRY.
+        *size* : int; number of point to sample.\n
+        Output -> a class random sampled (spatial) points.
+        """
+
+        self.shp_series = shape
+        self.samples = random.poisson(self.shp_series['geometry'], size=size)
+
+    """
+    # FROM: https://stackoverflow.com/a/69630606/5885810  (random poitns in SHP)
+    alternative also coming from libpysal. not very fast as of 25/09/24, though.
+    It potentially also allows for some 'Clustered Point Pattern' generation,
+    throughout the method "random.cluster_poisson(...".
+    """
+
+
 #~ SAMPLE FROM A COPULA & "CONDITIONAL" I_MAX-AVG_DUR PDFs ~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def COPULA_SAMPLING( COP, seas, BAND='', N=1 ):
@@ -773,6 +736,115 @@ def COPULA_SAMPLING( COP, seas, BAND='', N=1 ):
     i_max = MAXINT[ seas ][ BAND ].ppf( IntDur[:, 0] )
     s_dur = AVGDUR[ seas ][ BAND ].ppf( IntDur[:, 1] )
     return i_max, s_dur
+
+
+MATES, i_scaling = QUANTIZE_TIME( NUM_S, seas, simy, DUR_S[ okdur ] )
+
+
+
+def base_round(stamps, **kwargs):
+    """
+    rounds time.stamps to either floor or nearest T_RES parameter.\n
+    Input ->
+    *stamps* : np.array; float numpy representing seconds since some origin.\n
+    **kwargs ->
+    base : int; rounding temporal resolution.
+    time_tag : char; string indicating the base resolution.
+    time_dic : dic; dictionary containing the equivalences of 'tags' in base 60.
+    method : char; rounding method (either 'floor' or 'nearest').\n
+    Output -> rounded numpy (to custom temporal resolution, i.e., T_RES).
+    """
+    base = kwargs.get('base', T_RES)
+    time_dic = kwargs.get('time_dic', TIME_DICT_)
+    time_tag = kwargs.get('time_tag', TIME_OUTNC)
+    kase = kwargs.get('method', 'floor')
+    # https://stackoverflow.com/a/2272174/5885810
+    # update 'base'
+    base = base * time_dic[time_tag] * 60  # the system/dic is base.60 (-> * 60)
+    if kase == 'floor':
+        iround = (base * (np.ceil(stamps / base) - 1))  # .astype(TIMEINT)
+    elif kase == 'nearest':
+        iround = (base * (stamps / base).round())  # .astype(TIMEINT)
+    else:
+        raise TypeError("Wrong method passed!\n"
+                        "Pass 'floor' or 'nearest' to the 'method' argument.")
+    return iround
+
+
+#~ [TIME BLOCK] SAMPLE DATE.TIMES and XPAND THEM ACCORDING MOVING VECTORS ~~~~~#
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+def QUANTIZE_TIME( NUM_S, seas, simy, durations ):# durations=DUR_S
+    # global i_scaling
+# sample some dates (to capture intra-seasonality & for NC.storing)
+    DATES = TOD_CIRCULAR( NUM_S, seas, simy )
+# round starting.dates to nearest.floor T_RES
+    RATES = base_round( DATES )
+# turn the DUR_S into discrete time.slices
+    i_scaling = TIME_SLICE( (DATES+ -1*RATES), durations )
+# xploding of discrete timestamps (per storm.cluster)
+    MATES = np.concatenate( list(map(lambda r_s,i_s:
+        # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
+        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
+                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
+        RATES, i_scaling)) ).astype( TIMEINT )
+    return MATES, i_scaling
+
+
+def xxx(doy_par, tod_par, n, simy, date_origen):
+    # doy_par=DOYEAR[nreg]; tod_par=DATIME[nreg]; n=NUM_S
+
+    # computing DOY
+    M = n
+    all_dates = []
+    while M > 0:
+        cs_day = circular(doy_par,)
+        doys = cs_day.samples(M, data_type='doy')
+        # cs_day.plot_samples(data=doys, data_type='doy', bins=40)  # plotting
+        doys = doys[doys > 0]  # negative doys?? (do they belong to jan/dec?)
+        # into actual dates
+        dates = list(map(lambda d: datetime(year=DATE_POOL[0].year, month=1, day=1)
+                         + relativedelta(yearday=int(d)), doys.round(0)))
+        sates = pd.Series(dates)  # to pandas
+        # chopping into limits
+        sates = sates[(sates >= DATE_POOL[0]) & (sates <= DATE_POOL[-1])]
+        M = len(dates) - len(sates)
+        # updating to SIMY year (& storing)
+        all_dates.append(sates.map(lambda d: d + relativedelta(years=simy)))
+    all_dates = pd.concat(all_dates, ignore_index=True)
+
+    # computing TOD
+    cs_tod = circular(tod_par,)
+    times = cs_tod.samples(n, data_type='tod')
+    # cs_tod.plot_samples(data=times, data_type='tod', bins=40)  # plotting
+# SECONDS since DATE_ORIGIN
+# https://stackoverflow.com/a/50062101/5885810
+    stamps = np.asarray(list(map(lambda d, t: (d + timedelta(hours=t) -
+                                               date_origen).total_seconds(),
+                                 all_dates.dt.tz_localize(TIME_ZONE), times)))
+    # # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
+    # stamps = np.asarray(
+    #     list(map(lambda d, t: (d + timedelta(hours=t)).isoformat(
+    #         timespec='seconds'), dates, times)))
+    stamps = stamps * TIME_DICT_[TIME_OUTNC]  # scaled to output.TIMENC.res
+
+
+# sample some dates (to capture intra-seasonality & for NC.storing)
+    DATES = TOD_CIRCULAR( NUM_S, seas, simy )
+
+
+    # round starting.dates to nearest.floor T_RES
+    rates = base_round(stamps)
+
+# turn the DUR_S into discrete time.slices
+    i_scaling = TIME_SLICE( (DATES+ -1*rates), durations )
+# xploding of discrete timestamps (per storm.cluster)
+    MATES = np.concatenate( list(map(lambda r_s,i_s:
+        # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
+        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
+                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
+        rates, i_scaling)) ).astype( TIMEINT )
+    return MATES, i_scaling
+
 
 
 #~ SAMPLE DAYS.OF.YEAR and TIMES.OF.DAY (CIRCULAR approach) ~~~~~~~~~~~~~~~~~~~#
@@ -844,81 +916,7 @@ If you're doing "CIRCULAR" for DOY that means you did install "vonMisesMixtures"
     # # samples = RANDOM_SAMPLING( WINDIR[ seas ][''], number_of_samples )
     # # # 19 µs ± 76.3 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
 
-    # # taken from: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.vonmises.html
-    # fig = plt.figure(figsize=(12, 6))
-    # left = plt.subplot(121)
-    # right = plt.subplot(122, projection='polar')
-    # x = np.linspace(-np.pi, np.pi, 500)
-    # # # lines below computes the pdf.density (given the parameters)
-    # # vonmises_pdf = stats.vonmises.pdf(loc, kappa, x)  # using SCIPY's VONMISES
-    # # # the line below is for plotting vonmises from VONMISESMIXTURES (package)
-    # vonmises_pdf = ( PLTVAR[ seas ]['p'] *vonmises.density(x, PLTVAR[ seas ]['mus'], PLTVAR[ seas ]['kappas']) ).sum(axis=1)
-    # ticks = [0, 0.15, 0.3]
-    # # left
-    # left.plot(x, vonmises_pdf)
-    # left.set_yticks(ticks)
-    # number_of_bins = int(np.sqrt(number_of_samples))
-    # left.hist(samples, density=True, bins=number_of_bins)
-    # left.set_title("Cartesian plot")
-    # left.set_xlim(-np.pi, np.pi)
-    # left.grid(True)
-    # # right
-    # right.plot(x, vonmises_pdf, label="PDF")
-    # right.set_yticks(ticks)
-    # right.hist(samples, density=True, bins=number_of_bins, label="Histogram")
-    # right.set_title("Polar plot")
-    # right.legend(bbox_to_anchor=(0.15, 1.06))
-    # # xport
-    # plt.savefig(f'tmp_uniform_vmX.png', bbox_inches='tight',pad_inches=0.02, facecolor=fig.get_facecolor())
-    # plt.close()
-    # plt.clf()
 
-
-#~ SAMPLE DAYS.OF.YEAR and TIMES.OF.DAY (DISCRETE approach) ~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def TOD_DISCRETE( N, seas, simy ):# N=120
-    M = N
-    all_dates = []
-    while M>0:
-        soys = RANDOM_SAMPLING( DOYEAR[ seas ][''], M )
-# chopping into limits
-        doys = soys[(soys>=DATE_POOL[ seas ].__getitem__(0).timetuple().tm_yday) &\
-                    (soys<=DATE_POOL[ seas ].__getitem__(1).timetuple().tm_yday)]
-        # plt.hist(doys, bins=365)
-# into actual dates
-        dates = list(map(lambda d:
-            datetime(year=DATE_POOL[ seas ].__getitem__(0).year,month=1,day=1) +\
-            relativedelta(yearday=d), doys ))
-        sates = pd.Series( dates )              # to pandas
-        M = len(soys) - len(sates)
-        # print(M)
-# updating to SIMY year (& storing)
-        # all_dates.append( sates + pd.DateOffset(years=simy) )
-        all_dates.append( sates.map(lambda d:d +relativedelta(years=simy)) )
-        # # the line above DOES NOT give you errors when dealing with VOID arrays
-    all_dates = pd.concat( all_dates, ignore_index=True )
-
-    """
-If you're unlucky to be stuck with "DISCRETE"...
-then there's no point in using circular on TOD, is it?'
-    """
-# TIMES
-# sampling from a NORMAL distribution
-    times = npr.uniform(0, 1, N) *24
-    # # to check out if the sampling is done correctly
-    # plt.hist(times, bins=24)
-# SECONDS since DATE_ORIGIN
-# https://stackoverflow.com/a/50062101/5885810
-# https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
-    stamps = np.asarray( list(map(lambda d,t:
-        ((d + timedelta(hours=t)) - DATE_ORIGEN).total_seconds(),
-        all_dates.dt.tz_localize(TIME_ZONE), times)) )
-# # pasting and formatting
-# # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
-#     stamps = np.asarray(list(map(lambda d,t: (d + timedelta(hours=t)).isoformat(timespec='seconds'), dates, times)))
-    stamps = np.round(stamps, 0)#.astype('u8')
-# STAMPS here are scaled to the output.TIMENC.resolution
-    return stamps *TIME_DICT_[ TIME_OUTNC ]
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- RANDOM SMAPLING ----------------------------------------------------- (END) #
@@ -1049,16 +1047,6 @@ def ZTRATIFICATION( Z_OUT ):
 #- MISCELLANEOUS TO TIME-DISCRETIZATION ------------------------------ (START) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-#~ ROUND TIME.STAMPS to the 'T_RES' FLOOR! (or NEAREST 'T_RES') ~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def BASE_ROUND( stamps, base= T_RES ):
-# https://stackoverflow.com/a/2272174/5885810
-# "*60" because STAMPS come in seconds; and T_RES is in minutes
-    base = base *TIME_DICT_[ TIME_OUTNC ] *60
-    iround = (base *(np.ceil(stamps /base) -1))#.astype( TIMEINT )
-# # activate line below if you want to the NEAREST 'T_RES' (instead of FLOOR)
-#     iround = (base *(stamps /base).round())#.astype( TIMEINT )
-    return iround
 
 
 #~ SPLIT STORM.DURATION INTO DISCRETE/REGULAR TIME.SLICES ~~~~~~~~~~~~~~~~~~~~~#
@@ -1088,24 +1076,7 @@ def TIME_SLICE( DIFF_ATES, S_DUR ):# DIFF_ATES=(DATES+ -1*RATES); S_DUR=DUR_S[ o
     return sfactors
 
 
-#~ [TIME BLOCK] SAMPLE DATE.TIMES and XPAND THEM ACCORDING MOVING VECTORS ~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def QUANTIZE_TIME( NUM_S, seas, simy, durations ):# durations=DUR_S[ okdur ]
-    # global i_scaling
-# sample some dates (to capture intra-seasonality & for NC.storing)
-    DATES = eval(f'{tod_fun}( {NUM_S}, {seas}, {simy} )')
-    # DATES = TOD_CIRCULAR( NUM_S, seas, simy )
-# round starting.dates to nearest.floor T_RES
-    RATES = BASE_ROUND( DATES )
-# turn the DUR_S into discrete time.slices
-    i_scaling = TIME_SLICE( (DATES+ -1*RATES), durations )
-# xploding of discrete timestamps (per storm.cluster)
-    MATES = np.concatenate( list(map(lambda r_s,i_s:
-        # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
-        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
-                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
-        RATES, i_scaling)) ).astype( TIMEINT )
-    return MATES, i_scaling
+
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- MISCELLANEOUS TO TIME-DISCRETIZATION -------------------------------- (END) #
@@ -2001,7 +1972,7 @@ SOLO_UNO is never gonna be SMALLER THAN -> NEW_DATE; NEW_DATE accounts for the i
 
 #~ "THE" LOOP CALLING THE FUNCTIONS (until CUMSUM.is.REACHED) ~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN):
+def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN, date_origen):
 # NP_MASK = REGIONS['npma'][nreg];
 # train = reg_tot.copy(); mom = alltime.copy(); mask_shp = region_s['mask'].iloc[nreg]
 
@@ -2017,13 +1988,14 @@ def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN):
     while CUM_S < train and NUM_S >= 2:
     # while KOUNT < 3 and NUM_S >= 2:  # does the cycle 3x maximum!
 #%%
-    # sample random storm centres
-    # # https://stackoverflow.com/a/69630606/5885810  (rnd pts within shp)
-    #     CENTS = poisson( BUFFRX.geometry.xs(0), size=NUM_S)
-    #     CENTS = poisson(mask_shp.geometry.xs(0), size=NUM_S)
+        # sample random storm centres
         CENTS = scentres(mask_shp, NUM_S)  # CENTS.plot()
-        # CENTS = scentres(mask_shp, 100)
+        # # 561 ms ± 10.5 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+        # SENTS = scentros(mask_shp, NUM_S)
+        # # 1.07 s ± 29.6 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+        # CENTS.plot(region=SENTS.shp_series['geometry'], cents=SENTS.samples)
 
+        # CENTS = scentres(mask_shp, 100)
 
 
         # find MAX_DUR
@@ -2143,7 +2115,7 @@ def STARM():
 
 
 def STORM( NC_NAMES ):
-    global cut_lab, cut_bin, tod_fun, nc, sub_grp, nsim
+    global cut_lab, cut_bin, nc, sub_grp, nsim
 
 # define Z_CUTS labelling (if necessary)
     if Z_CUTS:
@@ -2237,10 +2209,6 @@ def STORM( NC_NAMES ):
             # FOR EVERY N_REGION
             for nreg in tqdm(range(NREGIONS), ncols=50):  # nreg=0
 
-                # # ESTABLISH HOW THE DOY-SAMPLING WILL BE DONE
-                #     tod_fun = 'TOD_CIRCULAR' if all(list(map(lambda k:
-                #         DOYEAR[nreg].keys().__contains__(k), ['alpha', 'phi', 'kappa']))) else 'TOD_DISCRETE'
-
                 # print(f'\nNREGIONS: {nreg + 1}/{NREGIONS}')
 
                 # scale (or not) the total seasonal rainfall
@@ -2249,7 +2217,7 @@ def STORM( NC_NAMES ):
 
                 newmom, cumout = main_loop(reg_tot,
                     region_s['mask'].iloc[nreg], region_s['npma'][nreg],
-                    simy, nreg, alltime, M_LEN,
+                    simy, nreg, alltime, M_LEN, date_origen,
                     )
                 alltime = newmom
                 cum_out.append( cumout )

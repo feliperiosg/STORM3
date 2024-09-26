@@ -806,6 +806,17 @@ def one_vm(trac):  # trac = mdir[2222,:].compute()
 class circular:
 
     def __init__(self, data, **kwargs):
+        """
+        fitting, random sampling, plotting and whatnots? for circular stats.\n
+        Input ->
+        *data* : dict/numpy; either a dict with parameters or numpy with data.\n
+        **kwargs ->
+        data_type : str; 'tod', 'doy','dir' or 'rad' (only for *data*==numpy).
+        max_mix : int; maximum number of vMF distros to fit.
+        met_cap : float; capping percentage of the lowest/total criterion.
+        criterion : char; selection of optimal fit ('BIC' or 'AIC').\n
+        Output -> a class random sampled (spatial) points.
+        """
 
         assertnat = f"Invalid data type!\n"\
             "Erroneous data type passed. Only DICTIONARY or NUMPY accepted."
@@ -862,10 +873,12 @@ class circular:
         """
         generates a random sample for the mixture of von Mises distributions.\n
         Input ->
-        alpha_ : np.float [0-1]; relative probability of each von Mises.
-        phi_   : np.float; parameter phi (or mu) of each von Mises.
+        *N_* : int; number of points in the random sample.\n
+        **kwargs ->
+        phi_ : np.float; parameter phi (or mu) of each von Mises.
         kappa_ : np.float; parameter kappa of each von Mises.
-        N_     : int; number of points in the random sample.\n
+        alpha_ : np.float [0-1]; relative probability of each von Mises.
+        data_type : char; type of output (i.e., 'tod', 'doy' or 'dir').\n
         Output -> array of size 'N_'.
         """
     # set up & update **kwargs
@@ -891,19 +904,23 @@ class circular:
         """
         plot a histogram with the optimal von Mises-mix model.\n
         **kwargs ->
-        n         : int; number of samples.
+        n : int; number of samples.
+        data : np.array; vector of random samples.
         data_type : str; 'tod' or 'doy' or 'dir' or 'rad'.
-        bins      : int; bins for histogram.
-        file      : str; name of the output-plot.
+        bins : int; bins for histogram.
+        file : str; name of the output-plot.\n
+        Output -> plot (matplotlib.figure or exported file).
         """
-        import matplotlib.pyplot as plt
-        plt.rc('font', size=11)
     # reading/assigning kwargs
         n_ = kwargs.get('n', 1000)
+        hist_data = kwargs.get('data', None)
         data_type = kwargs.get('data_type', self.data_type)
         transform_pars = self._transform_dic.get(data_type)
         bins = kwargs.get('bins', 80)
         prnt = kwargs.get('file', None)
+
+        import matplotlib.pyplot as plt
+        plt.rc('font', size=11)
     # define model
         mod_n = 'vmix'
         _, _, _, str_0 = circular.model_str(len(self.phi_), mod_n)
@@ -917,9 +934,10 @@ class circular:
         #     np.sort(self.samples(N_=n_, data_type=data_type)), transform_pars)
         xs_rad = np.linspace(-np.pi, np.pi, num=n_)  # , endpoint=False)
         ys = eval(f'{mod_n}(xs_rad, {str_1})')
-    # plot
+    # plot (update 'hist_data' first)
     # https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.vonmises.html
-        hist_data = self.data if isinstance(self.data, np.ndarray) else xs_rad
+        hist_data = self.data if isinstance(self.data, np.ndarray) else\
+            self._to_rad(hist_data, transform_pars)
         # bins = int(np.sqrt(len(hist_data)))  # a better approach of BINS?
         x_ticks = np.linspace(-np.pi, np.pi, 9)
         x_label = self._from_rad(x_ticks, transform_pars)

@@ -175,7 +175,7 @@ the voids in between by linear interpolation.
 T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
 NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
 MIN_DUR =  2                            # in minutes!
-MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
+MAX_DUR =  60 * 24 * 4                  # in minutes! -> 4 days (in this case)
 # # OR:
 # MIN_DUR =  []                           # use 'void' arrays if you want NO.CONSTRAINT on storm-duration
 # MAX_DUR =  []                           # ... in either (or both) MIN_/MAX_DUR parameters/constants
