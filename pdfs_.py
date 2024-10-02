@@ -818,11 +818,6 @@ class circular:
         Output -> a class random sampled (spatial) points.
         """
 
-        assertnat = f"Invalid data type!\n"\
-            "Erroneous data type passed. Only DICTIONARY or NUMPY accepted."
-        asserttyp = f"Data structure not passed!\n"\
-            "Pass 'tod' or 'doy' or 'dir' or 'rad' to the 'data_type' argument."
-
         self.data = data
         self.transform_pars = None
         self._transform_dic = {
@@ -841,7 +836,8 @@ class circular:
         elif isinstance(self.data, np.ndarray):
             self.data_type = kwargs.get('data_type', None)
             if self.data_type is None:
-                raise TypeError(asserttyp)
+                raise TypeError("Data structure not passed!\nPass 'tod' or 'doy'"
+                                " or 'dir' or 'rad' to the 'data_type' argument.")
             self.transform_pars = self._transform_dic.get(self.data_type)
             self.data = self._to_rad(self.data, self.transform_pars)
             self.max_mix = kwargs.get('max_mix', 9)
@@ -857,7 +853,8 @@ class circular:
             self.mix_str = None
             self._vmtab = self.fit()
         else:
-            raise TypeError(assertnat)
+            raise TypeError("Invalid data type!\nErroneous data type passed. "
+                            "Only DICTIONARY or NUMPY accepted.")
 
     def _from_rad(self, x, _pars):
         xt = _pars['add'] +\
@@ -888,6 +885,9 @@ class circular:
         kappa_ = kwargs.get('kappa_', self.kappa_)
         alpha_ = kwargs.get('alpha_', self.alpha_)
         data_type = kwargs.get('data_type', self.data_type)
+        if data_type not in ['tod', 'doy', 'dir', 'rad']:
+            raise TypeError("Data structure not passed!\nPass 'tod' or 'doy'"
+                            " or 'dir' or 'rad' to the 'data_type' argument.")
         transform_pars = self._transform_dic.get(data_type)
     # https://framagit.org/fraschelle/mixture-of-von-mises-distributions
     # taken from: ...\site-packages\vonMisesMixtures\tools.py
@@ -1293,14 +1293,14 @@ class elevation:
         *geo_*   : gpd.Geoseries.
         *raster* : path-to-TIFF.\n
         **kwargs\n
-        z_stat  : str (from *rasterstats*) to compute metrics on raster (count,\
-            min, max, mean, sum, std, median, majority, minority, unique,\
+        z_stat  : str (from *rasterstats*) to compute metrics on raster (count, \
+            min, max, mean, sum, std, median, majority, minority, unique, \
             range, nodata, nan).\n
         zones   : list; specifying the limits of the elevation bands.\n
         dem_crs : DEM's WKT.\n
         batch_size : int; amount of centers to process at a time.\n
-        Output -> list with pd.DataFrame containing summary.stats (left), and\
-            elevations tied to an elevation band (right).
+        Output -> tuple; pd.DataFrame containing summary.stats (first), and \
+            elevations tied to an elevation band (last).
         """
         # reading input & defaulting
         ztat = kwargs.get('z_stat', Z_STAT)
@@ -1517,36 +1517,44 @@ class betas:
 
     def __init__(self, cset, method, **kwargs):
         """
-        computes bi-variate copluas.\n
+        computes (among other key variables) the rainfall radial decay rate.\n
         Input ->
         *cset* : xarray - clipped dataset; or pandas - sampled values.
-        *method* : str; one of 'pf', 'total', or None
-        **kwargs\n
-        t_res:  float; seed data temporal resolution (in hours).\n
+        *method* : str; one of 'pf', 'total', or None.\n
+        **kwargs ->
+        t_res: float; seed data temporal resolution (in hours).
+        seed: float; initial/guess value for optimize.fsolve (of betas).
+        flag: bool; whether to only use (or not) "converging" betas.\n
         Output -> a class with an updated pd.DataFrame in *.df*.
         """
-
         # exponential decay model (alt. 1)
         self.model = lambda x, v, i, r: v -\
             1 / (2 * x**2) * i * np.pi * (1 - np.exp(-2 * x**2 * r**2))
-        # self.method = method
-        self.t_res = kwargs.get('t_res', None)
+        self.tres = kwargs.get('t_res', None)
+        self.flag = kwargs.get('flag', True)
+        self.seed = kwargs.get('seed', 0.5)
         # reading data into df
         if isinstance(cset, xr.Dataset) and method == 'pf':
             self.df = self.pf_base(cset)
         if isinstance(cset, xr.Dataset) and method == 'total':
             self.df = self.tt_base(cset)
         elif isinstance(cset, pd.DataFrame):
-            self.df = self.pd_base(cset, self.t_res)
+            self.df = self.pd_base(cset,)
         else:
             raise AssertionError(
                 f'WRONG INPUT TYPE!\n'
                 f'cset must be either xr.Dataset or pd.DataFrame.'
                 )
         # updating df
-        self.df = betas.find_beta(self.df, self.model)
+        self.df = betas.find_beta(self.df, self.model, self.seed, self.flag)
 
     def pf_base(self, cset):
+        """
+        computes variables based on 'precipitation-feature' tracking.\n
+        Input ->
+        *cset* : xarray; storm-tracking data.\n
+        Output -> pd.DataFrame with computed/augmented/more variables.
+        """
         base = cset[['pf_maxrainrate', 'pf_rainrate', 'pf_area',]]
         base = base.drop_vars('spatial_ref').to_dataframe()
         base['idx'] = np.arange(len(base))
@@ -1560,6 +1568,12 @@ class betas:
         return base
 
     def tt_base(self, cset):
+        """
+        computes variables based on 'totals-feature' tracking.\n
+        Input ->
+        *cset* : xarray; storm-tracking data.\n
+        Output -> pd.DataFrame with computed/augmented/more variables.
+        """
         max_ = cset[['pf_maxrainrate',]].max(dim=('nmaxpf'), keep_attrs=True)
         base = xr.merge([cset[['total_rain', 'area', 'movement_speed',]], max_],)
         base = base.drop_vars('spatial_ref').to_dataframe()
@@ -1578,31 +1592,60 @@ class betas:
         # base.set_index(keys=['idx'], drop=True, inplace=True)
         return base
 
-    def pd_base(self, cset, tres):
+    def pd_base(self, cset):
+        """
+        add estra variables to enable model fitting/optimization/solving.\n
+        Input ->
+        *cset* : pd.DataFrame; with fields\
+            'pf_maxrainrate' & 'radii'-or-'area' & 'avgrainrate'-or-'rratio'.\n
+        Output -> pd.DataFrame with extra variables (suited for model-fitting).
+        """
         if 'avgrainrate' not in cset.columns:
             cset['avgrainrate'] = cset['pf_maxrainrate'] / cset['rratio']
-        cset['volume'] = cset['avgrainrate'] * cset['area'] * tres
+        if 'area' not in cset.columns:
+            cset['area'] = np.pi * cset['radii']**2
         if 'radii' not in cset.columns:
             cset['radii'] = np.sqrt(cset['area'] / np.pi)
+        cset['volume'] = cset['avgrainrate'] * cset['area'] * self.tres
         return cset
 
     @staticmethod
-    def find_beta(base, decay_model):
-        beta, flag = betas.beta_calc(base, decay_model)
+    def find_beta(base, decay_model, seed, use_flag):
+        """
+        appends the retrieved betas to the passed data.frame.\n
+        Input ->
+        *base* : pd.DataFrame; storm-tracking data.
+        *decay_model* : function; lambda-function representing the model to fit.
+        *seed* : float; starting estimate for the roots.
+        *use_flag* : bool; use only 'converging'[1] values (True); or all (F).\n
+        Output -> updated and trimmed pd.DataFrame with 'beta' & 'flag' fields.
+        """
+        beta, flag = betas.beta_calc(base, decay_model, seed)
         tmp_df = pd.DataFrame({
-            'beta': abs(np.asarray(beta).ravel()), 'flag': flag, },
-            index=base.index)
-        # 1 means 'The solution converged.'
-        tmp_df = tmp_df.loc[tmp_df['flag'] == 1, ['beta']]
+            'beta': abs(np.asarray(beta).ravel()),
+            'flag': flag,
+            }, index=base.index)
+        if use_flag:
+            # 1 means 'The solution converged.'
+            tmp_df = tmp_df.loc[tmp_df['flag'] == 1, ['beta']]
         # tmp_df.plot(y='beta', kind='hist', bins=42); plt.show()
         base = base.join(tmp_df, how='inner')
         return base
 
     @staticmethod
-    def beta_calc(base_df, equation):
+    def beta_calc(base_df, equation, iseed):
+        """
+        finds roots for the passed *equation*.\n
+        Input ->
+        *base_df* : pd.DataFrame; with 'pf_maxrainrate' & 'radii'& 'volume'.
+        *equation* : function; lambda-function representing the model to fit.
+        *iseed* : float; starting estimate for the roots.\n
+        Output -> tuple with the found roots (left) and their flags (right).
+        """
         # https://stackoverflow.com/a/7015366/5885810
-        l_, s_, i_, m_ = zip(*map(lambda v, i, r:
-            optimize.fsolve(equation, 0.5, args=(v, i, r), full_output=True),
+        l_, s_, i_, m_ = zip(*map(
+            lambda v, i, r: optimize.fsolve(equation, x0=iseed, args=(v, i, r),
+                                            full_output=True),
             base_df['volume'], base_df['pf_maxrainrate'], base_df['radii']))
         return l_, i_
 
@@ -1613,7 +1656,7 @@ class fit_pdf:
 
     def __init__(self, data, family, **kwargs):
         """
-        computes bi-variate copluas.\n
+        tools for optimun-pdf-fit to raw-data via FITTER.\n
         Input ->
         *data* : numpy; vector of measurements to fit.
         *family* : list; list of scipy-pdfs to try and fit.
@@ -2121,6 +2164,7 @@ def compute():
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
         fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=r)
         # fit_rad.plot()
+        # [18.7, 434.6] -> MAM; [17.8, 435.6] -> OND;
 
         # # if working with areas
         # fit_are = fit_pdf(all_vars.df.area, family='nsym',)

@@ -92,7 +92,7 @@ bands, will still yield results!; nevertheless, such results won't be representa
 of the parametric functions/statistics found in '.../ProbabilityDensityFunctions.csv'.
 """
 
-TACTIC = 1  # the "way" STORM must be run
+TACTIC = 1  # the "way" STORM must be run, i.e., [1] for NO copulas; [2] COPULAS
 
 # # EPSG:42106 is not implemented in PyProj (or anywhere else) xP
 # EPSG_CODE = 42106       # EPSG Code of the local/regular Coordinate Reference System (https://epsg.io/42106)
@@ -150,31 +150,17 @@ Y_RES     =  5000.                      # in meters! (pxl.resolution for the 're
 # Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 # X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 # Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-
-CLOSE_DIS =  0.15                       # in km -> small circle emulating the storm centre's point/dot
-# storm minimum radius depends on spatial.resolution (for raster purposes);
-# it must be used/assigned in KM, as its distribution was 'computed' in KM
-MINRADIUS =  max([X_RES, Y_RES]) /1e3
-# distance between (rainfall) rings; heavily dependant on X_Y_RES | MINRADIUS
-RINGS_DIS =  MINRADIUS *(2) +.1         # in km -> distance between (rainfall) rings; heavily dependant on X_Y_RES
 """
 BUFFER extends the catchment boundary (some given distance), thus delimiting the area
 for which the storm centres are generated (within).
 The extension (bounding-box) of this 'buffer' defines too the limits of the rainfall
 fields, namely, the Area Of Interest (aoi).
-STORM generates circular storms reaching maximum intensity at their centres, and
-decaying towards a maximum radius. Hence, intermediate intensities are calculated
-for different radii between the storm's centre and its maximum radius. RINGS_DIS is the
-separation between these different radii; whereas CLOSE_DIS just simulates the storm's
-centre out of a very small circle.
-Once the spatial domain of the storm is populated by 'rings-of-rainfall', STORM fills
-the voids in between by linear interpolation.
 """
 
 ### TEMPORAL characterization
 T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
 NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
-MIN_DUR =  2                            # in minutes!
+MIN_DUR =  20                            # in minutes!
 MAX_DUR =  60 * 24 * 4                  # in minutes! -> 4 days (in this case)
 # # OR:
 # MIN_DUR =  []                           # use 'void' arrays if you want NO.CONSTRAINT on storm-duration
@@ -184,7 +170,7 @@ MAX_DUR and MIN_DUR constraints the storm-duration of the sampled pairs
 from the intenstity-duration copula.
 """
 # designed MAXIMUM rainfall for T_RES!! (Twice of that of IMERG!) [note also that 120 << 131.068_iMAX]
-MAXD_RAIN = 60 *2                       # in mm
+MAXD_RAIN = 60 * 2                      # in mm
 DISPERSE_ = .2                          # factor to split MAXD_RAIN into
 
 SEASON_TAG = 'OND'

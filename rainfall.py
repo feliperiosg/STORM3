@@ -31,7 +31,6 @@ import geopandas as gpd
 from scipy import stats
 from numpy import random as npr
 from statsmodels.distributions.copula.api import GaussianCopula
-# # from statsmodels.distributions.empirical_distribution import ECDF
 from scipy.interpolate import interp1d
 
 from osgeo import gdal
@@ -55,10 +54,12 @@ import libpysal as ps
 from pointpats import PoissonPointProcess, random, Window  # , PointPattern
 
 import matplotlib.pyplot as plt
+from functools import reduce
+from operator import iconcat
 from chunking import CHUNK_3D
 from parameters import *
 # from realization import READ_REALIZATION, REGIONALISATION#, EMPTY_MAP
-from pdfs_ import circular, field, masking
+from pdfs_ import betas, circular, elevation, field, masking
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -95,7 +96,6 @@ and didn't cause problems when running "fitter" either.
 #%% INPUT PARAMETERS
 
 """
-SEASONS = 1             # Number of Seasons (per Run)
 NUMSIMS = 2#1#2         # Number of runs per Season
 NUMSIMYRS = 1#2         # Number of years per run (per Season)
 
@@ -113,15 +113,17 @@ SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file i
 DEM_FILE = None
 OUT_PATH = './model_output'                             # output folder
 
-# RAIN_MAP = '../CHIMES/3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'     # no.CRS at all!
-# RAIN_MAP = './realisation_MAM_crs-wrong.nc'           # no..interpretable CRS
-RAIN_MAP = './realisation_MAM_crs-OK.nc'                # yes.interpretable CRS
-SUBGROUP = ''
-NREGIONS = 1#4#1                                        # number of regions to split the whole.region into
+RAIN_MAP = './model_input/realisation_MAM.nc'  # yes.interpretable CRS
+RAIN_MAP = './model_input/realisation_OND.nc'  # yes.interpretable CRS
+NREGIONS = 4  # number of regions to split the whole.region into
 
-Z_CUTS = None               # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-# Z_CUTS = [1350, 1500]     # in meters!
 Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
+# Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
+# Z_CUTS = [1000, 2000, 3000]  # [67.53, 97.15, 99.87]%
+Z_CUTS = [300,  600, 1200]  # in meters! [28.13, 48.75, 78.57]%
+# Z_CUTS = None  # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
+
+TACTIC = 1  # the "way" STORM must be run
 
 # OGC-WKT for HAD [taken from https://epsg.io/42106]
 WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
@@ -142,68 +144,22 @@ WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
     'AXIS["Easting",EAST],'\
     'AXIS["Northing",NORTH],'\
     'AUTHORITY["EPSG","42106"]]'
-# # ESRI-WKT for HAD [alternative?]
-# WKT_OGC = 'PROJCS["WGS84 / Lambert Azim Mozambique",'\
-#     'GEOGCS["WGS 84",'\
-#         'DATUM["WGS_1984",'\
-#             'SPHEROID["WGS_1984",6378137,298.257223563]],'\
-#         'PRIMEM["Greenwich",0],'\
-#         'UNIT["Decimal_Degree",0.0174532925199433]],'\
-#     'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
-#     'PARAMETER["latitude_of_origin",5],'\
-#     'PARAMETER["central_meridian",20],'\
-#     'UNIT["Meter",1]]'
-# # ---------------------------------------------------
-# # OGC-WKT for WGS84 [taken from https://epsg.io/4326]
-# WGS84_WKT = 'GEOGCS["WGS 84",'\
-#     'DATUM["WGS_1984",'\
-#         'SPHEROID["WGS 84",6378137,298.257223563,'\
-#             'AUTHORITY["EPSG","7030"]],'\
-#         'AUTHORITY["EPSG","6326"]],'\
-#     'PRIMEM["Greenwich",0,'\
-#         'AUTHORITY["EPSG","8901"]],'\
-#     'UNIT["degree",0.0174532925199433,'\
-#         'AUTHORITY["EPSG","9122"]],'\
-#     'AUTHORITY["EPSG","4326"]]'
 
-# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# # USE ANY OF THE FOLLOWING X_Y PAIRS, IF USING "SHP_REGION() -> [BUFFER.based 1ST]"
-BUFFER    =  8000.                      # in meters! -> buffer distance (out of the HAD)
+### GRID characterization
+BUFFER    =  7000.                      # in meters! -> buffer distance (out of the HAD)
 X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# X_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# #~STORM.WAY~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-CLOSE_DIS =  0.15                       # in km -> small circle emulating the storm centre's point/dot
-MINRADIUS =  max([X_RES, Y_RES]) /1e3
-RINGS_DIS =  MINRADIUS *(2) +.1         # in km -> distance between (rainfall) rings; heavily dependant on X_Y_RES
 
 T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
 NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
-MIN_DUR =  2                            # in minutes!
-MAX_DUR =  60*24*5                      # in minutes! -> 5 days (in this case)
-# # OR:
-# MIN_DUR =  []                           # use 'void' arrays if you want NO.CONSTRAINT on storm-duration
-# MAX_DUR =  []                           # ... in either (or both) MIN_/MAX_DUR parameters/constants
-# designed MAXIMUM rainfall for T_RES!! (Twice of that of IMERG!) [note also that 120 << 131.068_iMAX]
-MAXD_RAIN = 60 *2                       # in mm
-DISPERSE_ = .2                          # factor to split MAXD_RAIN into
+MIN_DUR =  20                            # in minutes!
+MAX_DUR =  60 * 24 * 4                  # in minutes! -> 4 days (in this case)
 
-# SEED_YEAR  = None                       # for your SIM/VAL to start in the current year
-SEED_YEAR = 2023                        # for your SIM/VAL to start in 2050
-### bear in mind the 'SEASONS' variable!... (when toying with 'SEASONS_MONTHS')
-# SEASONS_MONTHS = [[6,10], None]         # JUNE through OCTOBER (just ONE season)
-# # OR:
-SEASONS_MONTHS = [['mar','may'], ['oct','dec']]     # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# SEASONS_MONTHS = [[10,5], ['jul','sep']]            # OCT[y0] through MAY[y1] (& JULY[y1] through SEP[y1])
-# SEASONS_MONTHS = [['may','sep'],[11,12]]            # MAY through SEP (& e.g., NOV trhough DEC)
+MAXD_RAIN = 60 * 2                      # in mm
+DISPERSE_ = .2                          # factor to split MAXD_RAIN into
+SEASON_TAG = 'OND'
+SEED_YEAR = 2024                        # for your SIM/VAL to start in 2050
 TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
-# # OR:
-# TIME_ZONE    = 'UTC'
-# DATE_ORIGIN    = '1950-01-01'                       # to store dates as INT
 DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
 
 ### only touch this parameter if you really know what you're doing!!)
@@ -219,13 +175,8 @@ TIMEINT = 'u4'                          # format for integers in TIME dimension
 TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
 TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
 # TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
-TIME_DICT_ = dict(seconds=1 ,minutes=1/60, hours=1/60**2, days=1/(60**2*24))
+TIME_DICT_ = dict(seconds=1, minutes=1/60, hours=1/60**2, days=1/(60**2*24))
 """
-
-
-# %% switches
-
-ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 
 
 # %% FUNCTIONS' DEFINITION
@@ -243,7 +194,11 @@ def PAR_UPDATE(args):
         # print([PTOT_SC, PTOT_SF])
 
 
-# %% something xtra
+# %% switches & constants
+
+ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
+capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
+
 
 def wet_days():
     """
@@ -269,66 +224,31 @@ def wet_days():
     return year_z, nonths, datespool
 
 
-# def SHP_REGION():
-#     """
-#     X_RES     =     5000.                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-#     Y_RES     =     5000.                   # in meters! (pxl.resolution for the 'regular/local' CRS)
-#     """
-#     global llim, rlim, blim, tlim, XS, YS, CATCHMENT_MASK, BUFFRX, BUFFRX_MASK
-# # read WG-catchment shapefile (assumed to be in WGS84)
-#     wtrwgs = gpd.read_file( abspath( join(parent_d, SHP_FILE) ) )
-# # transform it into EPSG:42106 & make the buffer    # this code does NOT work!
-# # https://gis.stackexchange.com/a/328276/127894     (geo series into gpd)
-#     # wtrshd = wtrwgs.to_crs( epsg=42106 )
-#     wtrshd = wtrwgs.to_crs( crs = WKT_OGC )          # //epsg.io/42106.wkt
-#     BUFFRX = gpd.GeoDataFrame(geometry=wtrshd.buffer( BUFFER ))#.to_crs(epsg=4326)
-# # infering (and rounding) the limits of the buffer-zone
-#     llim = np.floor( BUFFRX.bounds.minx[0] /X_RES ) *X_RES #+X_RES/2
-#     rlim = np.ceil(  BUFFRX.bounds.maxx[0] /X_RES ) *X_RES #-X_RES/2
-#     blim = np.floor( BUFFRX.bounds.miny[0] /Y_RES ) *Y_RES #+Y_RES/2
-#     tlim = np.ceil(  BUFFRX.bounds.maxy[0] /Y_RES ) *Y_RES #-Y_RES/2
+# define some xtra-basics
+year_zero, M_LEN, date_pool = wet_days()
 
-# #~IN.CASE.YOU.WANNA.XPORT.(OR.USE).THE.MASK+BUFFER.as.geoTIFF~~~~~~~~~~~~~~~~~~#
-#     # # ACTIVATE if IN.TIFF
-#     # tmp_file = 'tmp-raster_mask-buff.tif'
-#     # tmp = gdal.Rasterize(tmp_file, BUFFRX.to_json(), format='GTiff'
-#     # ACTIVATE if IN.MEMORY
-#     tmp = gdal.Rasterize('', BUFFRX.to_json(), format='MEM'#, add=0
-#         , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
-#         , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
-#         , targetAlignedPixels=True
-#         # , targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-#     # UPDATE needed for outputSRS [in WKT instead of PROJ4]
-#         , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
-#         # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
-#         )
-#     BUFFRX_MASK = tmp.ReadAsArray().astype('u1')
-#     tmp = None
 
-# #~BURN THE CATCHMENT SHP INTO RASTER (WITHOUT BUFFER EXTENSION)~~~~~~~~~~~~~~~~#
-# # https://stackoverflow.com/a/47551616/5885810  (idx polygons intersect)
-# # https://gdal.org/programs/gdal_rasterize.html
-# # https://lists.osgeo.org/pipermail/gdal-dev/2009-March/019899.html (xport ASCII)
-# # https://gis.stackexchange.com/a/373848/127894 (outputing NODATA)
-# # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap (targetAlignedPixels==True)
-#     tmp = gdal.Rasterize('', wtrshd.to_json(), format='MEM', add=0
-#         , xRes=X_RES, yRes=Y_RES, noData=0, burnValues=1, allTouched=True
-#         , outputType=gdal.GDT_Int16, outputBounds=[llim, blim, rlim, tlim]
-#         , targetAlignedPixels=True
-#         # ,targetAlignedPixels=False # (check: https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap)
-#     # UPDATE needed for outputSRS [in WKT instead of PROJ4]
-#         , outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4()
-#         # # , width=(abs(rlim-llim)/X_RES).astype('u2'), height=(abs(tlim-blim)/X_RES).astype('u2')
-#         )
-#     CATCHMENT_MASK = tmp.ReadAsArray().astype('u1')
-#     tmp = None           # flushing!
+# convert DATE_ORIGIN into 'datetime'
+# https://stackoverflow.com/a/623312/5885810
+# https://stackoverflow.com/q/70460247/5885810  (timezone no pytz)
+# https://stackoverflow.com/a/65319240/5885810  (replace timezone)
+date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
+    tzinfo=ZoneInfo(TIME_ZONE))
 
-# # DEFINE THE COORDINATES OF THE XY.AXES
-#     XS, YS = list(map( lambda a,b,c: np.arange(a +c/2, b +c/2, c),
-#                       [llim,blim], [rlim,tlim], [X_RES,Y_RES] ))
-# # flip YS??
-#     YS = np.flipud( YS )      # -> important...so rasters are compatible with numpys
 
+# storm minimum radius depends on spatial.resolution (for raster purposes);
+# it must be used/assigned in KM, as its distribution was 'computed' in KM
+MINRADIUS = max([X_RES, Y_RES]) / 1e3
+"""
+STORM generates circular storms reaching maximum intensity at their centres, and
+decaying towards a maximum radius. Hence, intermediate intensities are calculated
+for different radii between the storm's centre and its maximum radius.
+
+Once the spatial domain of the storm is populated by 'rings-of-rainfall', STORM fills
+the voids in between by linear interpolation.
+"""
+
+# %% something xtra
 
 def regionalisation(file_zon, tag, xpace):
     """
@@ -443,13 +363,16 @@ def retrieve_pdf(tag, pd_fs):
     return distros
 
 
-def construct_pdfs(pdframe):
+def construct_pdfs(pdframe, **kwargs):
     """
     sets up and fills the global key pdf-parameters for STORM to work.\n
     Input ->
     *pdframe* : pd.DataFrame; dataframe with tabulated pdf-parameters.\n
+    **kwargs ->
+    tactic : int; strategy to compute STORM (1 via BETPAR; else via COPxxx).\n
     Output: None.
     """
+    taktik = kwargs.get('tactic', 1)
     # set this up carefully according to developed STORM (modeling) TACTICs
     core_tag = {
         'TOTALP': 'TOTALP_PDF',
@@ -463,7 +386,7 @@ def construct_pdfs(pdframe):
         }
     tact_tag = {
         'BETPAR': 'BETPAR_PDF'
-        } if TACTIC == 1 else {
+        } if taktik == 1 else {
         'INTRAT': 'INTRAT_PDF',
         'COPONE': 'COPONE_RHO'
         }
@@ -532,14 +455,7 @@ def construct_pdfs(pdframe):
 #     WSPEED = [{'':stats.norm(7.55, 1.9)}] *2
 
 
-# %% something else
-
-
-
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#- RANDOM SMAPLING --------------------------------------------------- (START) #
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
+# %% sampling (spatial too)
 
 # #~ N-RANDOM SAMPLES FROM 'ANY' GIVEN PDF ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -582,10 +498,10 @@ def truncated_sampling(distro, **kwargs):
     """
     sampling (truncated or not) preserving the n-requested.\n
     Input ->
-    *distro* : char; output path of nc-file.\n
+    *distro* : dict; contains a scipy.stats (pdf) frozen infrastructure.\n
     **kwargs ->
-    limits : tuple; variable limits to smaple within.
-    band : char; key (of the 'totalp_dis' dictionary) addressing the frozen pdf.
+    limits : tuple; variable limits to sample within.
+    band : char; key (of the 'distro' dictionary) addressing the frozen pdf.
     n : int; numbers of (random) samples.\n
     Output -> np.array of floats with n-samples.
     """
@@ -604,6 +520,62 @@ def truncated_sampling(distro, **kwargs):
     return sample
 
 
+def faster_sampling(distro, **kwargs):
+    """
+    faster sampling (truncated or not) preserving the n-requested.\n
+    Input ->
+    *distro* : dict; contains a scipy.stats (pdf) frozen infrastructure.\n
+    **kwargs ->
+    limits : tuple; variable limits to sample within.
+    band : char; key (of the 'distro' dictionary) addressing the frozen pdf.
+    n : int; numbers of (random) samples.\n
+    Output -> np.array of floats with n-samples.
+    """
+    limits = kwargs.get('limits', (-np.inf, np.inf))
+    band = kwargs.get('band', '')
+    n = kwargs.get('n', 1)
+    # sample via a .rvs
+    sample = []
+    while n > 0:
+        subple = distro[band].rvs(size=n)
+        # chopping into limits
+        subple = subple[(subple >= limits[0]) & (subple <= limits[-1])]
+        n = n - len(subple)
+        sample.append(subple)
+    return np.concat(sample)
+
+
+def copula_sampling(copula, dist_one, dist_two, **kwargs):
+    """
+    samples randomly (n-size) from a copula, conditional to two distros.\n
+    Input ->
+    *copula* : dict; contains a np.float (i.e., rho) per elevation band
+    *dist_one* : dict; contains a scipy.stats (pdf) frozen infrastructure
+    *dist_two* : dict; contains a scipy.stats (pdf) frozen infrastructure.\n
+    **kwargs ->
+    band : char; key (of the 'qant' dictionary) addressing the frozen pdf.
+    n : int; numbers of (random) samples.\n
+    Output -> tuple; containing np.floats for dist_one-samples (first) and \
+        dist_two-samples (last).
+    """
+    band = kwargs.get('band', '')
+    n = kwargs.get('n', 1)
+    # https://stackoverflow.com/a/12575451/5885810  (1D numpy to 2D)
+    # 'reshape' allows for n==1 sampling
+    # (-1, 2) cause 'GaussianCopula' always give 2 columns (BI-variate copula)
+    cop_space = GaussianCopula(corr=copula[band], k_dim=2).rvs(nobs=n).reshape(-1, 2)
+    # # for reproducibility
+    # cop_space = GaussianCopula(corr=copula[band], k_dim=2).rvs(nobs=n,
+    #     random_state=npr.RandomState(npr.PCG64(20220608))).reshape(-1, 2)
+
+    # # return pd.Series instead for easy concatenation (and shuffling) later
+    # var_one = dist_one[band].ppf(cop_space[:, 0])
+    # var_two = dist_two[band].ppf(cop_space[:, 1])
+    var_one = pd.Series(dist_one[band].ppf(cop_space[:, 0]), name=band)
+    var_two = pd.Series(dist_two[band].ppf(cop_space[:, 1]), name=band)
+    return var_one, var_two
+
+
 class scentres:
 
     def __init__(self, shape, size, **kwargs):
@@ -619,7 +591,6 @@ class scentres:
         out_real : int; index of the realization to output.\n
         Output -> a class random sampled (spatial) points.
         """
-
         self.shp_series = shape
         self.size = size
         self.n_real = kwargs.get('realizations', 1)
@@ -710,7 +681,6 @@ class scentros:
         *size* : int; number of point to sample.\n
         Output -> a class random sampled (spatial) points.
         """
-
         self.shp_series = shape
         self.samples = random.poisson(self.shp_series['geometry'], size=size)
 
@@ -722,25 +692,7 @@ class scentros:
     """
 
 
-#~ SAMPLE FROM A COPULA & "CONDITIONAL" I_MAX-AVG_DUR PDFs ~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def COPULA_SAMPLING( COP, seas, BAND='', N=1 ):
-# create the copula & sample from it
-# https://stackoverflow.com/a/12575451/5885810  (1D numpy to 2D)
-# (-1, 2) -> because 'GaussianCopula' will always give 2-cols (as in BI-variate copula)
-# the 'reshape' allows for N=1 sampling
-    IntDur = GaussianCopula(corr=COP[ seas ][ BAND ], k_dim=2).rvs( nobs=N ).reshape(-1, 2)
-    # # for reproducibility
-    # IntDur = GaussianCopula(corr=COP[ seas ][ BAND ], k_dim=2).rvs(
-    #     nobs=N, random_state=npr.RandomState(npr.PCG64(20220608))).reshape(-1, 2)
-    i_max = MAXINT[ seas ][ BAND ].ppf( IntDur[:, 0] )
-    s_dur = AVGDUR[ seas ][ BAND ].ppf( IntDur[:, 1] )
-    return i_max, s_dur
-
-
-MATES, i_scaling = QUANTIZE_TIME( NUM_S, seas, simy, DUR_S[ okdur ] )
-
-
+# %% time block
 
 def base_round(stamps, **kwargs):
     """
@@ -751,16 +703,18 @@ def base_round(stamps, **kwargs):
     base : int; rounding temporal resolution.
     time_tag : char; string indicating the base resolution.
     time_dic : dic; dictionary containing the equivalences of 'tags' in base 60.
+    base_system: int; conversion constant for the time_dic-system (default: 60).
     method : char; rounding method (either 'floor' or 'nearest').\n
     Output -> rounded numpy (to custom temporal resolution, i.e., T_RES).
     """
     base = kwargs.get('base', T_RES)
     time_dic = kwargs.get('time_dic', TIME_DICT_)
     time_tag = kwargs.get('time_tag', TIME_OUTNC)
+    s_base = kwargs.get('base_system', 60)  # sexagesimal
     kase = kwargs.get('method', 'floor')
     # https://stackoverflow.com/a/2272174/5885810
     # update 'base'
-    base = base * time_dic[time_tag] * 60  # the system/dic is base.60 (-> * 60)
+    base = base * time_dic[time_tag] * s_base
     if kase == 'floor':
         iround = (base * (np.ceil(stamps / base) - 1))  # .astype(TIMEINT)
     elif kase == 'nearest':
@@ -771,28 +725,56 @@ def base_round(stamps, **kwargs):
     return iround
 
 
-#~ [TIME BLOCK] SAMPLE DATE.TIMES and XPAND THEM ACCORDING MOVING VECTORS ~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def QUANTIZE_TIME( NUM_S, seas, simy, durations ):# durations=DUR_S
-    # global i_scaling
-# sample some dates (to capture intra-seasonality & for NC.storing)
-    DATES = TOD_CIRCULAR( NUM_S, seas, simy )
-# round starting.dates to nearest.floor T_RES
-    RATES = base_round( DATES )
-# turn the DUR_S into discrete time.slices
-    i_scaling = TIME_SLICE( (DATES+ -1*RATES), durations )
-# xploding of discrete timestamps (per storm.cluster)
-    MATES = np.concatenate( list(map(lambda r_s,i_s:
-        # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
-        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
-                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
-        RATES, i_scaling)) ).astype( TIMEINT )
-    return MATES, i_scaling
+def slice_time(time_raw, time_rnd, s_dur, **kwargs):
+    """
+    splits storm duration into discrete/regular time slices.\n
+    Input ->
+    *time_raw* : np.array; float numpy representing seconds since some origin.
+    *time_rnd* : np.array; float numpy of base-rounded seconds since some origin.
+    *s_dur* : np.array; float numpy of storm durations (in hours).\n
+    **kwargs ->
+    time_tag : char; string indicating the time-resolution of storm durations.\n
+    Output -> list of np.arrays containing time-slices of storm durations.
+    """
+    time_tag = kwargs.get('time_tag', 'hours')
+    # s_dur in minutes
+    s_dur = s_dur / (TIME_DICT_[time_tag] * 60)
+    date_diff = time_raw + -1 * time_rnd
+    # how much time to the right (from STARTING.TIME) you have in the 1st slice
+    left_dur = 1 - date_diff / (T_RES * TIME_DICT_[TIME_OUTNC] * 60)
+    # how many complete-and-remaining tiles you have for slicing
+    cent_dur = s_dur / T_RES - left_dur
+    # negatives imply storm.duration smaller than slice [so update 1st slice]
+    left_dur[cent_dur < 0] = s_dur[cent_dur < 0] / T_RES
+    # extract the number of complete-centered slices
+    cent_int = cent_dur.astype(TIMEINT)
+    # remainings of the complete-centered slices is what goes to the last slice
+    righ_dur = cent_dur - cent_int
+    righ_dur[righ_dur < 0] = np.nan  # remove negatives
+    # establish/repeat the number of centered-whole slices
+    # https://stackoverflow.com/a/3459131/5885810
+    cent_int = list(map(lambda x, y: [x] * y, [1] * len(cent_int), cent_int))
+    # join LEFT, CENTER, and RIGHT slices
+    sfactors = list(map(np.hstack, np.stack(
+        [left_dur, np.array(cent_int, dtype='object'), righ_dur],
+        axis=1).astype('object')))
+    # remove NANs, and apply rainfall.scalability factor
+    # '/ 60' (60 mins in 1h) because T_RES -> minutes & S_DUR -> mm/h [ALWAYS!]
+    sfactors = list(map(lambda x: x[~np.isnan(x)] * T_RES / 60, sfactors))
+    return sfactors
 
 
-def xxx(doy_par, tod_par, n, simy, date_origen):
-    # doy_par=DOYEAR[nreg]; tod_par=DATIME[nreg]; n=NUM_S
-
+def quantum_time(doy_par, tod_par, DUR_S, n, simy):
+    """
+    samples datetimes and quatize them into packs of storm duration(s).\n
+    Input ->
+    *doy_par* : dic; vonMises-Fisher mixture-parameters for Day-of-Year.
+    *tod_par* : dic; vonMises-Fisher mixture-parameters for Time-of-Day.
+    *DUR_S* : np.array; float numpy of storm durations (in hours).
+    *n* : int; sample size.
+    *simy* : int; index/ordinal indicating the year under simulation.\n
+    Output -> tuple; list-quatized hourly resolutions & their xploded equivalent (date)times.
+    """
     # computing DOY
     M = n
     all_dates = []
@@ -802,151 +784,87 @@ def xxx(doy_par, tod_par, n, simy, date_origen):
         # cs_day.plot_samples(data=doys, data_type='doy', bins=40)  # plotting
         doys = doys[doys > 0]  # negative doys?? (do they belong to jan/dec?)
         # into actual dates
-        dates = list(map(lambda d: datetime(year=DATE_POOL[0].year, month=1, day=1)
+        dates = list(map(lambda d: datetime(year=date_pool[0].year, month=1, day=1)
                          + relativedelta(yearday=int(d)), doys.round(0)))
         sates = pd.Series(dates)  # to pandas
         # chopping into limits
-        sates = sates[(sates >= DATE_POOL[0]) & (sates <= DATE_POOL[-1])]
+        sates = sates[(sates >= date_pool[0]) & (sates <= date_pool[-1])]
         M = len(dates) - len(sates)
         # updating to SIMY year (& storing)
         all_dates.append(sates.map(lambda d: d + relativedelta(years=simy)))
     all_dates = pd.concat(all_dates, ignore_index=True)
-
     # computing TOD
     cs_tod = circular(tod_par,)
     times = cs_tod.samples(n, data_type='tod')
     # cs_tod.plot_samples(data=times, data_type='tod', bins=40)  # plotting
-# SECONDS since DATE_ORIGIN
-# https://stackoverflow.com/a/50062101/5885810
-    stamps = np.asarray(list(map(lambda d, t: (d + timedelta(hours=t) -
-                                               date_origen).total_seconds(),
-                                 all_dates.dt.tz_localize(TIME_ZONE), times)))
+    # https://stackoverflow.com/a/50062101/5885810
+    # SECONDS since DATE_ORIGIN
+    stamps = np.asarray(
+        list(map(
+            lambda d, t: (d + timedelta(hours=t) - date_origen).total_seconds(),
+            all_dates.dt.tz_localize(TIME_ZONE), times
+            ))
+        )
     # # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
-    # stamps = np.asarray(
-    #     list(map(lambda d, t: (d + timedelta(hours=t)).isoformat(
-    #         timespec='seconds'), dates, times)))
+    # stamps = np.asarray(list(map(lambda d, t: (
+    #     d +timedelta(hours=t)).isoformat(timespec='seconds'), dates, times)))
     stamps = stamps * TIME_DICT_[TIME_OUTNC]  # scaled to output.TIMENC.res
-
-
-# sample some dates (to capture intra-seasonality & for NC.storing)
-    DATES = TOD_CIRCULAR( NUM_S, seas, simy )
-
-
     # round starting.dates to nearest.floor T_RES
     rates = base_round(stamps)
-
-# turn the DUR_S into discrete time.slices
-    i_scaling = TIME_SLICE( (DATES+ -1*rates), durations )
-# xploding of discrete timestamps (per storm.cluster)
-    MATES = np.concatenate( list(map(lambda r_s,i_s:
-        # np.arange(start=r_s, stop=r_s + 60*T_RES*len(i_s), step=60*T_RES),
-        np.arange(start=r_s, stop=r_s + (T_RES *TIME_DICT_[ TIME_OUTNC ] *60) *len(i_s),
-                  step=T_RES *TIME_DICT_[ TIME_OUTNC ] *60),
-        rates, i_scaling)) ).astype( TIMEINT )
-    return MATES, i_scaling
+    # turn the DUR_S into discrete time.slices
+    s_cal = slice_time(stamps, rates, DUR_S)
+    # xploding of discrete timestamps (per storm.cluster)
+    tres_up = T_RES * TIME_DICT_[TIME_OUTNC] * 60
+    mates = np.concatenate(list(map(lambda r_s, i_s: np.arange(
+        start=r_s, stop=r_s + tres_up * len(i_s), step=tres_up),
+        rates, s_cal))).astype(TIMEINT)
+    return mates, s_cal
 
 
-
-#~ SAMPLE DAYS.OF.YEAR and TIMES.OF.DAY (CIRCULAR approach) ~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def TOD_CIRCULAR( N, seas, simy ):# N=120
-    M = N
-    all_dates = []
-    while M>0:
-        doys = vonmises.tools.generate_mixtures( p=DOYEAR[ seas ]['p'],
-            mus=DOYEAR[ seas ]['mus'], kappas=DOYEAR[ seas ]['kappas'], sample_size=M)
-# to DOY
-        doys = (doys +np.pi) /(2*np.pi) *365 -1
-    # negatives are giving me troubles (difficult to discern if they belong to january/december)
-        doys = doys[ doys>0 ]
-        # # to check out if the sampling is done correctly
-        # plt.hist(doys, bins=365)
-# into actual dates
-        dates = list(map(lambda d:
-            datetime(year=DATE_POOL[ seas ][0].year,month=1,day=1) +\
-            relativedelta(yearday=int( d )), doys.round(0) ))
-        sates = pd.Series( dates )              # to pandas
-# chopping into limits
-        sates = sates[(sates>=DATE_POOL[ seas ][0]) & (sates<=DATE_POOL[ seas ][-1])]
-        M = len(dates) - len(sates)
-        # print(M)
-# updating to SIMY year (& storing)
-        # all_dates.append( sates + pd.DateOffset(years=simy) )
-        all_dates.append( sates.map(lambda d:d +relativedelta(years=simy)) )
-        # # the line above DOES NOT give you errors when dealing with VOID arrays
-    all_dates = pd.concat( all_dates, ignore_index=True )
-
-    """
-If you're doing "CIRCULAR" for DOY that means you did install "vonMisesMixtures"
-... therefore, sampling for TOD 'must' also be circular (why don't ya)
-    """
-# TIMES
-# sampling from MIXTURE.of.VON_MISES-FISHER.distribution
-    times = vonmises.tools.generate_mixtures(p=DATIME[ seas ]['p'],
-        mus=DATIME[ seas ]['mus'], kappas=DATIME[ seas ]['kappas'], sample_size=N)
-# from radians to decimal HH.HHHH
-    times = (times +np.pi) /(2*np.pi) *24
-    # # to check out if the sampling is done correctly
-    # plt.hist(times, bins=24)
-# SECONDS since DATE_ORIGIN
-# https://stackoverflow.com/a/50062101/5885810
-    stamps = np.asarray( list(map(lambda d,t:
-        (d + timedelta(hours=t) - DATE_ORIGEN).total_seconds(),
-        all_dates.dt.tz_localize( TIME_ZONE ), times)) )
-# # pasting and formatting
-# # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
-#     stamps = np.asarray(list(map(lambda d,t: (d + timedelta(hours=t)).isoformat(timespec='seconds'), dates, times)))
-# STAMPS here are scaled to the output.TIMENC.resolution
-    return stamps *TIME_DICT_[ TIME_OUTNC ]
-
-    # # VISUALISATION
-    # import matplotlib.pyplot as plt
-    # # having 1st defined SEAS (down in "STORM")
-    # PLTVAR = WINDIR
-    # # PLTVAR = DOYEAR
-    # number_of_samples = 200
-    # samples = vonmises.tools.generate_mixtures( p=PLTVAR[ seas ]['p'],
-    #     mus=PLTVAR[ seas ]['mus'], kappas=PLTVAR[ seas ]['kappas'], sample_size=number_of_samples)
-    # # # 1.86 ms ± 6.32 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
-    # # # if using VONMISES from SCIPY
-    # # loc = .9 * np.pi    # circular mean
-    # # kappa = .00001      # concentration
-    # # samples = stats.vonmises(loc=loc, kappa=kappa).rvs(number_of_samples)
-    # # or
-    # # samples = RANDOM_SAMPLING( WINDIR[ seas ][''], number_of_samples )
-    # # # 19 µs ± 76.3 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
-
-
-
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#- RANDOM SMAPLING ----------------------------------------------------- (END) #
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
+# %% other block
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- RASTER MANIPULATION ----------------------------------------------- (START) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-#~ CREATE AN OUTER RING/POLYGON ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# *1e3 to go from km to m
-def LAST_RING( all_radii, CENTS ):# all_radii=RADII
-# "resolution" is the number of segments in which a.quarter.of.a.circle is divided into.
-# ...now it depends on the RADII/RES; the larger a circle is the more resolution it has.
-    ring_last = list(map(lambda c,r: gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy(x=[c[0]], y=[c[1]] ).buffer( r *1e3,
-            # resolution=int((3 if r < 1 else 2)**np.ceil(r /2)) ),
-            # resolution=np.ceil(r /MINRADIUS) +1 ), # or maybe... "+1"??
-            resolution=np.ceil(r /MINRADIUS) +2 ), # or maybe... "+2"??
-        crs=WKT_OGC), CENTS, all_radii))
+def last_ring(radii, centres, **kwargs):
+# radii=RADII[0]; centres=M_CENT[0]
+    """
+    creates a circular polygon of given radius and center.\n
+    Input ->
+    *radii* : numpy; float numpy of storm-radius (in km).
+    *centres* : numpy; 2D-numpy with the X-Y's of storm centers.\n
+    **kwargs ->
+    scaling_dis : float; scaling factor between radius-units and m (1000m==1km).
+    base_radius : float; minimum (base) radius (in km).
+    nonsense : int; factor to tailor-suit the segment resolution.\n
+    Output -> geopandas.GeoDataFrame with circular polygons of storm-max-radii.
+    """
+    scal = kwargs.get('scaling_dis', 1e3)
+    brad = kwargs.get('base_radius', MINRADIUS)
+    nons = kwargs.get('nonsense', 2)
+    # # slower approach
+    # ring_last = list(map(lambda c, r: gpd.GeoDataFrame(
+    #     geometry=gpd.points_from_xy(x=[c[0]], y=[c[1]]).buffer(
+    #         # r * scal, resolution=int((3 if r < 1 else 2)**np.ceil(r / 2)),
+    #         r * scal, resolution=np.ceil(r / brad) + nons),
+    #     crs=WKT_OGC), centres, radii))
+    geom = gpd.points_from_xy(x=centres[:, 0], y=centres[:, 1])
+    geom = geom.buffer(radii * scal, resolution=(np.ceil(radii / brad) + nons).mean())
+    # geom = geom.buffer(radii * scal, resolution=8*2)
+    ring_last = gpd.GeoDataFrame(geometry=geom, crs=WKT_OGC)
+    # "resolution": number of segments in which 1/4.of.a.circle is divided into.
+    # (now) it depends on the RADII/MINRADIUS; the larger a circle the higher its resolution.
     return ring_last
 
+
+# %% others
 
 #~ CREATE CIRCULAR SHPs (RINGS & CIRCLE) & ASSING RAINFALL TO C.RINGS ~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def LOTR( RADII, MAX_I, DUR_S, BETAS, CENTS ):
     all_radii = list(map(lambda r:
-        np.r_[np.arange(r, CLOSE_DIS, -RINGS_DIS), CLOSE_DIS], RADII))
+        np.r_[np.arange(r, 0.15, -10.1), 0.15], RADII))
 
     all_rain = list(map(lambda i,d,b,r: list(map( lambda r:
     # # model: FORCE_BRUTE -> a * np.exp(-2 * b * x**2)
@@ -1007,37 +925,6 @@ def RASTERIZE( ALL_RINGS ):# posx=23; ALL_RINGS=RINGS[posx]
     return fall
 
 
-#~ COMPUTE STATS OVER A DEM.RASTER (GIVEN A SHP.POLYGON) ~~~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def ZTRATIFICATION( Z_OUT ):
-    # global qants, ztats
-    if Z_CUTS:
-# calculate zonal statistics
-        # test = zonal_stats(abspath( join(parent_d, SHP_FILE) ),
-        #     './data_WG/dem/WGdem_wgs84.tif', stats='count min mean max median')#??
-        # IF YOUR DEM IS IN WGS84... RE-PROJECT THE POLYGONS TO 4326 (WGS84)
-        ztats = zonal_stats(vectors=Z_OUT.to_crs(epsg=4326).geometry,
-            raster=abspath( join(parent_d, DEM_FILE) ), stats=Z_STAT)
-        # # OTHERWISE, A FASTER APPROACH IS HAVING THE DEM/RASTER IN THE LOCAL CRS
-        # # ...i.e., DEM_FILE=='./data_WG/dem/WGdem_26912.tif'
-        # ztats = zonal_stats(vectors=Z_OUT.geometry,
-        #     raster=abspath( join(parent_d, DEM_FILE) ), stats=Z_STAT)
-# to pandas
-        ztats = pd.DataFrame( ztats )
-# column 'E' classifies all Z's according to the CUTS
-        ztats['E'] = pd.cut(ztats[ Z_STAT ], bins=cut_bin, labels=cut_lab, include_lowest=True)
-        ztats.sort_values(by='E', inplace=True)
-# storm centres/counts grouped by BAND
-# https://stackoverflow.com/a/20461206/5885810  (index to column)
-        qants = ztats.groupby(by='E').count().reset_index(level=0)
-    else:
-# https://stackoverflow.com/a/17840195/5885810  (1-row pandas)
-        # qants = pd.DataFrame( {'E':'', 'median':len(Z_OUT)}, index=[0] )
-        qants = pd.DataFrame( {'E':'', Z_STAT:len(Z_OUT)}, index=[0] )
-        # ztats = pd.DataFrame( {'E':np.repeat('',len(Z_OUT))} )
-        ztats = pd.Series( range(len(Z_OUT)) )      # 5x-FASTER! than the line above
-    return qants, ztats
-
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- RASTER MANIPULATION ------------------------------------------------- (END) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -1049,32 +936,6 @@ def ZTRATIFICATION( Z_OUT ):
 
 
 
-#~ SPLIT STORM.DURATION INTO DISCRETE/REGULAR TIME.SLICES ~~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def TIME_SLICE( DIFF_ATES, S_DUR ):# DIFF_ATES=(DATES+ -1*RATES); S_DUR=DUR_S[ okdur ]
-# how much time to the right (from STARTING.TIME) you have in the 1st slice
-    LEFT_DUR = 1 -DIFF_ATES /(T_RES *TIME_DICT_[ TIME_OUTNC ] *60)
-# how many complete-and-remaining tiles you have for slicing
-    CENT_DUR = S_DUR /T_RES -LEFT_DUR   # S_DUR & T_RES always in minutes!
-# negatives imply storm.duration smaller than slice [so update accordingly the 1st slice]
-    LEFT_DUR[ CENT_DUR <0 ] = S_DUR[ CENT_DUR <0 ] /T_RES
-# extract the number of complete-centered slices
-    # CENT_INT = CENT_DUR.astype( 'i8' )
-    CENT_INT = CENT_DUR.astype( TIMEINT )
-# the remains of the complete-centered slices is what goes to the last slice [+ remove negatives]
-    RIGH_DUR = CENT_DUR - CENT_INT
-    RIGH_DUR[ RIGH_DUR < 0 ] = np.nan
-# establish/repeat the number of centered-whole slices
-# https://stackoverflow.com/a/3459131/5885810
-    CENT_INT = list(map(lambda x,y:[x]*y, [1] * len(CENT_INT), CENT_INT))
-# join LEFT, CENTER, and RIGHT slices
-    sfactors = list(map(np.hstack, np.stack([LEFT_DUR,
-        np.array(CENT_INT, dtype='object'), RIGH_DUR], axis=1).astype('object') ))
-# remove NANs, and apply rainfall.scalability factor
-# '/60' (60mins in 1h) because T_RES -> minutes & S_DUR -> mm/h [ALWAYS!]
-    sfactors = list(map(lambda x:x[~np.isnan(x)] * T_RES /60, sfactors))
-    return sfactors
-
 
 
 
@@ -1082,6 +943,8 @@ def TIME_SLICE( DIFF_ATES, S_DUR ):# DIFF_ATES=(DATES+ -1*RATES); S_DUR=DUR_S[ o
 #- MISCELLANEOUS TO TIME-DISCRETIZATION -------------------------------- (END) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
+
+# %% xttras 1
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- EXTRA-CHUNK OF MISCELLANEOUS FUNCTIONS ---------------------------- (START) #
@@ -1098,46 +961,61 @@ def TIME_SLICE( DIFF_ATES, S_DUR ):# DIFF_ATES=(DATES+ -1*RATES); S_DUR=DUR_S[ o
 #     return d_bool
 
 
-#~ UPSCALE A LIST [GIVENG A VECTOR OF 'REPETITVE' VALUES/PATTERNS] ~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def XPAND( LIZT, NREP ):# NREP=i_scaling
-    return list(map(lambda x:np.repeat(x, list(map(len, NREP))), LIZT))
+# #~ UPSCALE A LIST [GIVENG A VECTOR OF 'REPETITVE' VALUES/PATTERNS] ~~~~~~~~~~~~#
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# def XPAND( LIZT, NREP ):# NREP=i_scaling
+#     return list(map(lambda x:np.repeat(x, list(map(len, NREP))), LIZT))
 
 
-#~ MOVE STORM CENTRES ALONG A WIND.DIR [RETURNING DISPLACED/MOVING CENTRES] ~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def MOVING_STORM( XENTS, i_scaling, seas ):# XENTS=CENTS[ okdur ]
-# WIND.DIRECTION
-# sampling from MIXTURE?? of VON_MISES-FISHER.distribution
-    # angles = vonmises.tools.generate_mixtures(p=WINDIR[ seas ]['p'],
-    #     mus=WINDIR[ seas ]['mus'], kappas=WINDIR[ seas ]['kappas'], sample_size=len(XENTS))
-    angles = RANDOM_SAMPLING( WINDIR[ seas ][''], len(XENTS) )
-# from radians to azimuth
-    azimut = angles +np.pi/2
-# WIND.SPEED
-# sample wind speed [in km/h]
-    wspeed = RANDOM_SAMPLING( WSPEED[ seas ][''], len(XENTS) )
-# # no need for adjusting to T_RES as 'i_scaling' does so
-#     wspeed = wspeed *T_RES /60  # because T_RES is in 'minutes'
-# silly upscaling so one can see it's moving (COMMENT OUT in PRODUCTION!!)
-    wspeed = wspeed *2.9
+def moving_storm(dir_par, vel_par, i_scaling, centres, **kwargs):
+    """
+    samples storm direction and velocity; and moves storm initial centres along.\n
+    Input ->
+    *dir_par* : dic; vonMises-Fisher mixture-parameters for storm-direction.
+    *vel_par* : dict; contains a scipy.stats (pdf) frozen infrastructure.
+    *i_scaling* : list; numpys list with time-quantization per storm.
+    *centres* : numpy; 2D-numpy with the X-Y's of storm initial centers.\n
+    **kwargs ->
+    speed_lim : tuple; variable limits to sample within.
+    speed_stat : char; numpy stat to apply to an array.\n
+    Output -> (list of?) 2D-numpy array of X-Y's displaced/moved storm centres.
+    """
+    s_lims = kwargs.get('speed_lim', (-np.inf, np.inf))
+    # s_stat = kwargs.get('speed_stat', None)
+    s_stat = kwargs.get('speed_stat', "transpose")
 
-# DISPLACE THE STORM_CENTRES
-# there might be VOIDs in 'i_scaling' as we don't need tha last.element
-    stride = list(map( np.cumsum,
-        # list(map(np.multiply, wspeed *1.9, list(map(lambda x:np.r_[0,x[:-1]], i_scaling)) )) ))
-        list(map(np.multiply, wspeed, list(map(lambda x:np.r_[0,x[:-1]], i_scaling)) )) ))
-    # deltax = list(map(np.multiply, stride *1000, np.cos(azimut)))
-    # deltay = list(map(np.multiply, stride *1000, np.sin(azimut)))
-    deltax = list(map(lambda s,a:s*1000 *np.cos(a), stride, azimut))
-    deltay = list(map(lambda s,a:s*1000 *np.sin(a), stride, azimut))
-# 'strides' are in km!
-    x_s = list(map(np.add, XENTS[:,0], deltax))
-    y_s = list(map(np.add, XENTS[:,1], deltay))
-# put them in the same format as input
-    n_cent = np.stack((np.concatenate(x_s),np.concatenate(y_s)), axis=1)
+    # sampling storm direction (in m/s)
+    i_lens = list(map(len, i_scaling))
+    wspeed = faster_sampling(vel_par, limits=s_lims, n=np.sum(i_lens))
+    wspeed = np.split(wspeed, np.array(i_lens).cumsum()[:-1])
+    # storm direction (already as azimuth)
+    cs_dir = circular(dir_par,)
+    azimut = cs_dir.samples(len(i_lens), data_type='dir')
+
+    # displace the storm_centres
+    pad_i = list(map(lambda x: np.concat(([0], x[:-1])), i_scaling))
+    # update 'wspeed' to 's_stat'
+    # wspeed = wspeed if s_stat is None else list(map(eval(f'np.{s_stat}'), wspeed))
+    wspeed = list(map(eval(f'np.{s_stat}'), wspeed))
+    stride = list(map(np.cumsum, list(map(np.multiply, wspeed, pad_i))))
+    # these "deltas" are computational faster (by 3x) than:
+    # deltax = list(map(lambda s, a: s * 1000 * np.cos(a), stride, azimut))
+    # ... but be mindful that strictly speaking STRIDE is the one to "* 1000"!
+    # "* 1000" because the velocity is in m/s but the reference.grid is in km!
+    deltax = list(map(np.multiply, stride, np.cos(azimut) * 1000))  # (in km!)
+    deltay = list(map(np.multiply, stride, np.sin(azimut) * 1000))  # (in km!)
+    # updated-and-aggregated centers
+    x_s = list(map(np.add, centres[:, 0], deltax))
+    y_s = list(map(np.add, centres[:, 1], deltay))
+
+    # put them in the same format as input
+    n_cent = np.stack((np.concatenate(x_s), np.concatenate(y_s)), axis=1)
+    # if output in a list-of-numpys structured
+    n_cent = np.split(n_cent, np.array(i_lens).cumsum()[:-1])
     return n_cent
 
+
+# %% xttras 2
 
 #~ SORT A RAIN.CUBE [in Z-TIME] GIVEN SOME TIMESTAMPS ~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -1326,11 +1204,14 @@ def nc_bytes():
     """
     scales 'down' floats to integers.\n
     Input: none.\n
-    Output ->
+    Output (sets up the following globals) ->
     SCL : float; multiplicative scaling factor.
     ADD : float; additive scaling factor.
-    MINIMUM : int; minimum integer allowed.\n
+    MINIMUM : int; minimum integer allowed.
+    iMAX: float; maximum allowed float (for rainfall).\n
     """
+    global SCL, ADD, MINIMUM, iMAX
+
     # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
     # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
     INTEGER = int(RAINFMT[-1])
@@ -1386,7 +1267,7 @@ def nc_bytes():
         SCL = 1.
         ADD = 0.
         MINIMUM = 0.
-    return SCL, ADD, MINIMUM
+    # return SCL, ADD, MINIMUM, iMAX
 
 
 def nc_file_i(nc, nsim, xpace, **kwargs):
@@ -1968,11 +1849,11 @@ SOLO_UNO is never gonna be SMALLER THAN -> NEW_DATE; NEW_DATE accounts for the i
     # # ROUNDX( r_ain )
     # # # 1.22 s ± 106 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
 
-#%%
+# %% main loop
 
 #~ "THE" LOOP CALLING THE FUNCTIONS (until CUMSUM.is.REACHED) ~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN, date_origen):
+def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN):
 # NP_MASK = REGIONS['npma'][nreg];
 # train = reg_tot.copy(); mom = alltime.copy(); mask_shp = region_s['mask'].iloc[nreg]
 
@@ -1989,66 +1870,150 @@ def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN, date_origen):
     # while KOUNT < 3 and NUM_S >= 2:  # does the cycle 3x maximum!
 #%%
         # sample random storm centres
-        CENTS = scentres(mask_shp, NUM_S)  # CENTS.plot()
+        CENT = scentres(mask_shp, NUM_S)  # CENT.plot()
         # # 561 ms ± 10.5 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-        # SENTS = scentros(mask_shp, NUM_S)
+        # SENT = scentros(mask_shp, NUM_S)
         # # 1.07 s ± 29.6 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-        # CENTS.plot(region=SENTS.shp_series['geometry'], cents=SENTS.samples)
+        # CENT.plot(region=SENT.shp_series['geometry'], cents=SENT.samples)
 
-        # CENTS = scentres(mask_shp, 100)
+        # CENT = scentres(mask_shp, 100)
 
-
-        # find MAX_DUR
-        dur_lim = np.array([T_RES, MAX_DUR]) * TIME_DICT_[TIME_OUTNC]
+        # to 'hours' because the AVGDUR PDF is in hours
+        # dur_lim = np.array([T_RES, MAX_DUR]) * TIME_DICT_[TIME_OUTNC]
+        dur_lim = np.array([MIN_DUR, MAX_DUR]) * TIME_DICT_[TIME_OUTNC]
         DUR_S = truncated_sampling(AVGDUR[nreg], limits=dur_lim, n=NUM_S)
+        # faster_sampling is indeed FASTER than truncated_sampling!!
 
         # okdur == NUM_S
 
+        # time computation
+        MATE, i_scaling = quantum_time(DOYEAR[nreg], DATIME[nreg], DUR_S, NUM_S, simy)
+        group_idx = np.array(list(map(len, i_scaling))).cumsum()[:-1]
 
-# calling the DATE.TIME block
-        MATES, i_scaling = QUANTIZE_TIME( NUM_S, seas, simy, DUR_S[ okdur ] )
+        # multiply and displace storm.centres
+        M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], i_scaling, CENT.samples)
+        # # run the line below instead for positive.speeds & constant.speed storms
+        # M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], i_scaling, CENT.samples,
+        #                       speed_lim=(0.01, np.inf), speed_stat='mean')
 
-
-
-
-    # sampling maxima radii
-        RADII = TRUNCATED_SAMPLING( RADIUS[ seas ][''], [1* MINRADIUS, None], NUM_S )
-        RADII = RADII *9.5 # -> so we can have large storms than the resolution
-    # polygon(s) for maximum radii
-        RINGO = LAST_RING( RADII, CENTS )
-
-    # define pandas to split the Z_bands (or not)
-        qants, ztats = ZTRATIFICATION( pd.concat( RINGO ) )
-    # compute copulas given the Z_bands (or not)
-        MAX_I, DUR_S = list(map(np.concatenate, zip(* qants.apply( lambda x:\
-            # COPULA_SAMPLING(COPULA, seas, x['E'], x['median']), axis='columns') ) ))
-            COPULA_SAMPLING(COPULA, seas, x['E'], x[ Z_STAT ]), axis='columns') ) ))
+        # sampling maxima radii
+        RADII = faster_sampling(RADIUS[nreg], limits=(MINRADIUS, np.inf), n=MATE.size)
+        RADII = np.split(RADII, group_idx)
+        # 876 μs ± 4.81 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+        # # run the line below instead for averaged/unique radii per storm
+        # RADII = list(map(lambda x: np.repeat(x.mean(), len(x)), RADII))
 
 
-    # increase/decrease maximum intensites
-        # MAX_I = MAX_I[ okdur ] * (1 + STORMINESS_SC[ seas ] + ((simy +0) *STORMINESS_SF[ seas ]))
-        MAX_I = MAX_I[ okdur ] * 2.1#1
-    # choping any max_intensity above the permitted/designed MAXD_RAIN
-        MAX_I[ MAX_I > MAXD_RAIN ] = MAXD_RAIN
+        if TACTIC == 1:
+            # sampling maxima radii
+            max_lim = np.nanmin(np.array([MAXD_RAIN, iMAX], dtype='f4')) if\
+                capmax_or_not == 1 else iMAX
+            MAX_I = faster_sampling(MAXINT[nreg], limits=(NO_RAIN, max_lim), n=MATE.size)
+            MAX_I = np.split(MAX_I, group_idx)
+
+            # sampling betas
+            %%timeit
+            BETA = BETPAR[nreg][''].rvs(size=MATE.size)
+            %timeit
+            BETA = faster_sampling(BETPAR[nreg], limits=(-np.inf, np.inf), n=MATE.size)
+
+            BETA = np.split(BETA, group_idx)
+        else:
+            # polygon(s) for maximum radii
+            RINGO = list(map(last_ring, RADII, M_CENT))
+            # 1.48 ms ± 3.92 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+            # 29 ms ± 225 μs per loop (mean ± std. dev. of 7 runs, 10 loops each) [slower approach]
+
+            # storm-center Z-tratification
+            # https://stackoverflow.com/a/7015366/5885810  (list.map with 2 outputs)
+            dem_ = abspath(join(parent_d, DEM_FILE))
+            qant, ztat = zip(*map(
+                lambda g: elevation.retrieve_z(g, dem_, zones=Z_CUTS), RINGO))
+            # qant, ztat = elevation.retrieve_z(RINGO[-1], dem_, zones=Z_CUTS)
+
+            # compute copulas given the Z_bands (or not)
+            _one, _two = zip(*map(lambda q: zip(*q.apply(
+                lambda x: copula_sampling(COPONE[nreg], MAXINT[nreg], INTRAT[nreg],
+                                          band=x['E'], n=x[Z_STAT]), axis='columns',
+                )), qant))
+                # )), qant[-10:-8]))  # ztat[-10:-8]  # MAX_I[-10:-8]
+            # concatenating & shuffling
+            i_max = list(map(
+                lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _one, ztat))
+            I_RAT = list(map(
+                lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _two, ztat))
+
+            # pre-pairing for betas
+            # https://stackoverflow.com/a/45323085/5885810  (list-of-lists flat)
+            d_frame = pd.DataFrame({
+                'pf_maxrainrate': reduce(iconcat, i_max, []),
+                'rratio': reduce(iconcat, I_RAT, []),
+                'radii': reduce(iconcat, RADII, []),
+                })
+            # capping maxima above design.rain (or even max.possible.float)
+            max_lim = np.min((MAXD_RAIN, iMAX)) if capmax_or_not == 1 else iMAX
+            d_frame.loc[d_frame['pf_maxrainrate'] > max_lim, 'pf_maxrainrate'] = max_lim
+
+            beto = betas(d_frame, method=None, seed=0.11, flag=False,
+                         t_res=T_RES * TIME_DICT_['minutes'])
+            # plt.hist(beto.df.loc[beto.df.flag!=1, 'beta'], bins=51, color='g')
+            # plt.hist(beto.df['beta'], bins=51)
+            BETA = np.split(beto.df['beta'].values, group_idx)
+
+            # max.intensity as list.of.numpys
+            MAX_I = np.split(beto.df['pf_maxrainrate'].values, group_idx)
 
 
+    # # expand supporting arrays
+    #     M_RADII, M_MAXI, M_DURS, M_BETAS = XPAND(
+    #         [RADII[ okdur ], MAX_I, DUR_S[ okdur ], BETAS], i_scaling )
 
-    # # if FORCE_BRUTE was used -> truncation deemed necessary to avoid
-    # # ...ULTRA-high intensities [chopping almost the PDF's 1st 3rd]
-        # BETAS = TRUNCATED_SAMPLING( BETPAR[ seas ][''], [-0.008, +0.078], NUM_S )
-        # [BETPAR[ seas ][''].cdf(x) if x else None for x in [-.035, .035]]
-        BETAS = RANDOM_SAMPLING( BETPAR[ seas ][''], NUM_S )
 
-    # multiply and displace storm.centres
-        M_CENTS = MOVING_STORM( CENTS[ okdur ], i_scaling, seas )
+def LOTR(radius, decay, i0, lapse, centre, **kwargs):
+# radius=RADII[-1][0]; decay=BETA[-1][0]; i0=MAX_I[-1][0]; lapse=i_scaling[-1][0]; centre=M_CENT[-1][0]
+    """
+    creates a circular polygon of given radius and center.\n
+    Input ->
+    *radius* : numpy; float numpy of storm-radius (in km).
+    *decay* : numpy; float numpy of radial-decay (in 1/km).
+    *i0* : numpy; float numpy of maximum storm intesity (in mm/h).
+    *lapse* : numpy; float numpy of the actual raining time-lapse (in h).
+    *centre* : numpy; 2D-numpy with the X-Y of storm center.\n
+    **kwargs ->
+    scaling_dis : float; scaling factor between radius-units and m (1000m==1km).
+    res : int; number of segments in which a circle.quadrant is divided into.
+    dot_size: float; circle's radius emulating the storm centre's point/dot.
+    sep_ring: float; separation (in km) between rainfall rings.\n
+    Output -> geopandas.GeoDataFrame with linestings of circular.rain from centre.
+    """
+    scal = kwargs.get('scaling_dis', 1e3)
+    res = kwargs.get('res', 13)
+    sdot = kwargs.get('dot_size', 0.15)
+    sep = kwargs.get('sep_ring',  MINRADIUS * (2) + .1)  # 10.1
+    # c_radii = np.append(np.arange(radius, sdot, - sep), sdot)
+    c_radii = np.concatenate(
+        (np.arange(radius, sdot, - sep), np.array([sdot])))
+    # rainfall [in mm] for every c_radii
+    c_rain = i0 * lapse * np.exp(-2 * decay**2 * c_radii**2)  # in mm!!
 
-    # expand supporting arrays
-        M_RADII, M_MAXI, M_DURS, M_BETAS = XPAND(
-            [RADII[ okdur ], MAX_I, DUR_S[ okdur ], BETAS], i_scaling )
+    # buffer_strings
+    # https://www.knowledgehut.com/blog/programming/python-map-list-comprehension
+    # https://stackoverflow.com/a/30061049/5885810  (map nest)
+    # .boundary gives the LINESTRING element
+    geom = gpd.points_from_xy(x=[centre[0]], y=[centre[1]])
+    geom = geom.buffer(c_radii * scal, resolution=res).boundary
+    rain_ring = gpd.GeoDataFrame({'rain': c_rain,'geometry':geom}, crs=WKT_OGC)
+    # rain_ring.iloc[0].geometry  # rain_ring.iloc[-1].geometry
+    return rain_ring
+
+
 
     # compute granular rainfall over intermediate rings
         # RINGS = LOTR( RADII[ okdur ], MAX_I, DUR_S[ okdur ], BETAS, CENTS[ okdur ] )
         RINGS = LOTR( M_RADII, M_MAXI, M_DURS, M_BETAS, M_CENTS )
+
+        # radius=RADII[-1][0]; decay=BETA[-1][0]; i0=MAX_I[-1][0]; lapse=i_scaling[-1][0]; centre=M_CENT[-1][0]
+        RINGS = list(map(lambda r, d, i, l, c: list(map(lambda r, d, i, l, c: LOTR(r, d, i, l, c), r, d, i, l, c)), RADII, BETA, MAX_I, i_scaling, M_CENT))
 
     # COLLECTING THE STORMS
         # STORM_MATRIX = list(map(RASTERIZE, RINGS, RINGO[ okdur ]))
@@ -2085,9 +2050,10 @@ def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN, date_origen):
 # %% central wrapper
 
 def STARM():
+    nc_bytes()
     PDFS = read_pdfs()
     construct_pdfs(PDFS)
-    year_zero, M_LEN, DATE_POOL = wet_days()
+    year_zero, M_LEN, date_pool = wet_days()
     date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
         tzinfo=ZoneInfo(TIME_ZONE))
     SPACE = masking()
@@ -2114,6 +2080,8 @@ def STARM():
     nc.close()
 
 
+
+
 def STORM( NC_NAMES ):
     global cut_lab, cut_bin, nc, sub_grp, nsim
 
@@ -2122,19 +2090,15 @@ def STORM( NC_NAMES ):
         cut_lab = [f'Z{x+1}' for x in range(len(Z_CUTS) +1)]
         cut_bin = np.union1d(Z_CUTS, [0, 9999])
 
+    # set globals for INTEGER rainfall-NC-output
+    nc_bytes()
+
     # read (and check) the PDF-parameters
     PDFS = read_pdfs()
-    # PDFS = read_pdfs('./model_input/ProbabilityDensityFunctions_OND_1r.csv')
     construct_pdfs(PDFS)
+    # pdfx = read_pdfs('./model_input/ProbabilityDensityFunctions_OND_3r.csv')
+    # construct_pdfs(pdfx, tactic=2)
 
-    # define some xtra-basics
-    year_zero, M_LEN, DATE_POOL = wet_days()
-    # convert DATE_ORIGIN into 'datetime'
-    # https://stackoverflow.com/a/623312/5885810
-    # https://stackoverflow.com/q/70460247/5885810  (timezone no pytz)
-    # https://stackoverflow.com/a/65319240/5885810  (replace timezone)
-    date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
-        tzinfo=ZoneInfo(TIME_ZONE))
 
     # imported CLASS (from PDFS_) definining GRID.settings
     # BUFFRX_MASK --> SPACE.buffer_mask
@@ -2166,8 +2130,6 @@ def STORM( NC_NAMES ):
             lambda x: truncated_sampling(TOTALP[x], limits=(NO_RAIN, np.inf)),
             range(len(TOTALP))))), name='s_rain',)
 
-# define transformation constants/parameters for INTEGER rainfall-NC-output
-    SCL, ADD, MINIMUM = nc_bytes()
 
     VOIDXR = np.empty((0, len(SPACE.ys), len(SPACE.xs))).astype(f'{RAINFMT}')
     VOIDXR.fill(np.round(0, 0).astype(f'{RAINFMT}'))
@@ -2217,7 +2179,7 @@ def STORM( NC_NAMES ):
 
                 newmom, cumout = main_loop(reg_tot,
                     region_s['mask'].iloc[nreg], region_s['npma'][nreg],
-                    simy, nreg, alltime, M_LEN, date_origen,
+                    simy, nreg, alltime, M_LEN,
                     )
                 alltime = newmom
                 cum_out.append( cumout )
