@@ -29,9 +29,10 @@ import pyproj as pp
 import netCDF4 as nc4
 import geopandas as gpd
 from scipy import stats
+from scipy.ndimage import gaussian_filter, uniform_filter
 from numpy import random as npr
 from statsmodels.distributions.copula.api import GaussianCopula
-from scipy.interpolate import interp1d
+# from scipy.interpolate import interp1d
 
 from osgeo import gdal
 # https://gdal.org/api/python_gotchas.html#gotchas-that-are-by-design-or-per-history
@@ -55,11 +56,15 @@ from pointpats import PoissonPointProcess, random, Window  # , PointPattern
 
 import matplotlib.pyplot as plt
 from functools import reduce
-from operator import iconcat
+from operator import iconcat, itemgetter
 from chunking import CHUNK_3D
 from parameters import *
 # from realization import READ_REALIZATION, REGIONALISATION#, EMPTY_MAP
 from pdfs_ import betas, circular, elevation, field, masking
+
+
+# np.set_printoptions(threshold = np.inf)
+np.set_printoptions(linewidth = 130)
 
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -194,8 +199,9 @@ def PAR_UPDATE(args):
         # print([PTOT_SC, PTOT_SF])
 
 
-# %% switches & constants
+# %% constants & switches
 
+minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
 
@@ -224,7 +230,7 @@ def wet_days():
     return year_z, nonths, datespool
 
 
-# define some xtra-basics
+# some xtra-basics
 year_zero, M_LEN, date_pool = wet_days()
 
 
@@ -236,17 +242,364 @@ date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
     tzinfo=ZoneInfo(TIME_ZONE))
 
 
-# storm minimum radius depends on spatial.resolution (for raster purposes);
-# it must be used/assigned in KM, as its distribution was 'computed' in KM
-MINRADIUS = max([X_RES, Y_RES]) / 1e3
-"""
-STORM generates circular storms reaching maximum intensity at their centres, and
-decaying towards a maximum radius. Hence, intermediate intensities are calculated
-for different radii between the storm's centre and its maximum radius.
+# %% nc-file creation
 
-Once the spatial domain of the storm is populated by 'rings-of-rainfall', STORM fills
-the voids in between by linear interpolation.
-"""
+def round_x(x, prec=3, base=PRECISION):
+    """
+    custom rounding to a specific base.\n
+    Input ->
+    *x* : float or np.array.\n
+    **kwargs ->
+    prec : int; significative digits.
+    base : float; rounding precision (resolution).\n
+    Output -> rounded float/np.array to the given precision/base.
+    """
+    # # https://stackoverflow.com/a/18666678/5885810
+    return (base * (np.array(x) / base).round()).round(prec)
+
+
+def nc_bytes():
+    """
+    scales 'down' floats to integers.\n
+    Input: none.\n
+    Output (sets up the following globals) ->
+    SCL : float; multiplicative scaling factor.
+    ADD : float; additive scaling factor.
+    MINIMUM : int; minimum integer allowed.
+    iMAX: float; maximum allowed float (for rainfall).\n
+    """
+    global SCL, ADD, MINIMUM, iMAX
+
+    # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
+    # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
+    INTEGER = int(RAINFMT[-1])
+    MINIMUM = 1  # 1 because i need 0 for filling
+    MAXIMUM = +(2**(INTEGER * 8)) - 1  # 65535 (largest unsigned 16bits-int; 0 also counts)
+    # MAXIMUM = +(2**(4 * 8)) - 1  # 4294967296 (largest unsigned 32bits-int)
+    # # if RAINFMT=='i2' (signed 16bit-int)
+    # MINIMUM = -(2**(INTEGER * 8 - 1))  # -32768 (smallest signed 16bits-int)
+    # MAXIMUM = +(2**(INTEGER * 8 - 1) -1)  # +32767 (largest signed 16bits-int)
+
+    # NORMALIZING THE RAINFALL SO IT CAN BE STORED AS 16-BIT INTEGER
+    # https://stackoverflow.com/a/59193141/5885810  (scaling 'integers')
+    # https://stats.stackexchange.com/a/70808/354951  (normalize data 0-1)
+    iMIN = 0.
+# # run your own (customized) tests
+# temp = 3.14159
+# epsilon = [0.006, 0.005, 0.004, 0.003, 0.002, 0.001, .01]
+# for epsn in epsilon:
+#     seed = 1500
+#     while temp > epsn:
+#         temp = (seed - iMIN) / (MAXIMUM - MINIMUM - 1)
+#         seed -= 1
+#     print(f'starting in {iMIN}, you\'d need a max. of '\
+#           f'~{seed + 1} to guarantee an epsilon of {epsn}')
+# # starting in 0.0, you'd need a max. of ~ 393 to guarantee an epsilon of 0.006
+# # starting in 0.0, you'd need a max. of ~ 327 to guarantee an epsilon of 0.005
+# # starting in 0.0, you'd need a max. of ~ 262 to guarantee an epsilon of 0.004
+# # starting in 0.0, you'd need a max. of ~ 196 to guarantee an epsilon of 0.003
+# # starting in 0.0, you'd need a max. of ~ 131 to guarantee an epsilon of 0.002
+# # starting in 0.0, you'd need a max. of ~  65 to guarantee an epsilon of 0.001
+# # starting in 0.0, you'd need a max. of ~1501 to guarantee an epsilon of 0.01
+# # starting in 0.0, you'd need a max. of: 429496 to guarantee an epsilon of 0.0001  # (for INTEGER==4)
+    # if you want a larger precision (or your variable is in the 'low' scale,
+    # ...say Summer Temperatures in Celsius) you must/could lower this limit.
+    iMAX = PRECISION * (MAXIMUM - MINIMUM -1) + iMIN
+    # 131.066 -> for MINIMUM==1
+    # 131.068 -> for MINIMUM==0
+    SCL = (iMAX - iMIN) / (MAXIMUM - MINIMUM - 1) # -1 because 0 doesn't count
+    ADD = iMIN - SCL * MINIMUM
+# # testing
+# allv = PRECISION * (np.linspace(MINIMUM, MAXIMUM - 1, MAXIMUM - 1) - 1) + iMIN
+# # allv = np.arange(iMIN, iMAX + PRECISION, PRECISION)
+# allv.shape  # (65534,)
+# allv[-1] == iMAX  # np.True_
+# allt = ((allv - ADD) / SCL).round(0).astype(RAINFMT)
+# # am i missing some value because of rounding??
+# np.flatnonzero(np.diff(allt) != 1)  # array([], dtype=int64)
+# vall = ((allt * SCL) + ADD).round(4)
+# voll = round_x((allt * SCL) + ADD).round(4)
+# (vall == voll).all()  # np.True_
+    # if storing as FLOAT
+    if RAINFMT[0] == 'f':
+        SCL = 1.
+        ADD = 0.
+        MINIMUM = 0.
+    # return SCL, ADD, MINIMUM, iMAX
+
+
+def nc_file_i(nc, nsim, xpace, **kwargs):
+    """
+    skeleton of the (output) nc-file.\n
+    Input ->
+    *nc* : char; output path of nc-file.
+    *nsim* : int; iterable of simulation.
+    *xpace* : class; class where spatial variables are defined.\n
+    **kwargs ->
+    sref_name : char; name of the variable storing the CRS.\n
+    Output ->
+    sub_grp : nc.sub_group; nc variable storing the nsim-run.
+    tag_y : char; coords-attribute in the Y-axis.
+    tag_x : dict; coords-attribute in the X-axis.\n
+    """
+    sref_name = kwargs.get('sref_name', 'spatial_ref')
+
+    # define SUB.GROUP and its dimensions
+    sub_grp = nc.createGroup(f'run_{"{:02d}".format(nsim + 1)}')
+    sub_grp.createDimension('y', len(xpace.ys))
+    sub_grp.createDimension('x', len(xpace.xs))
+    sub_grp.createDimension('n', NUMSIMYRS)
+
+    """
+LOCAL.CRS (netcdf definition)
+-----------------------------
+Customization of these parameters for your local CRS is relatively easy!.
+All you have to do is to 'convert' the PROJ4 (string) parameters of your (local)
+projection into CF conventions.
+The following links offer you a guide on how to do so,
+and the conventions between CF & PROJ4 & WKT:
+# https://cfconventions.org/wkt-proj-4.html
+# http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#appendix-grid-mappings
+# http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#_trajectories
+# https://spatialreference.org/
+In this case, the PROJ4.string (from the WKT) is:
+    pp.CRS.from_wkt(WKT_OGC).to_proj4(); (or) pp.CRS.from_epsg(EPSG).to_proj4()
+    '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
+which is very similar to the one provided by ISRIC/andresQuichimbo:
+    '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
+The amount (and type) of parameters will vary depending on your local CRS. For
+instance [http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#lambert-azimuthal-equal-area],
+The LAEA (lambert_azimuthal_equal_area) system requieres 4 parameters:
+    longitude_of_projection_origin, latitude_of_projection_origin,
+    false_easting, & false_northing
+which correspond to PROJ4 parameters [https://cfconventions.org/wkt-proj-4.html]:
+    +lon_0, +lat_0, +x_0, +y_0
+The use of PROJ4 is now being discouraged (https://inbo.github.io/tutorials/tutorials/spatial_crs_coding/).
+Neverthelesss, and for now, it still works under this framework to store data
+in the local CRS, and at the same time be able to visualize it in WGS84
+(via, e.g., https://www.giss.nasa.gov/tools/panoply/) without the need to
+transform (and store) local coordinates into Lat-Lon.
+[02/08/23] We now use RIOXARRAY to "attach" the CRS, and establish some common
+parameters to generate some consistency when reading future? random rain-fields.
+    """
+# IF FOR SOME REASON YOU'D PREFER TO STORE YOUR DATA IN WGS84...
+# COMMENT OUT THE FOLLOWING SECTION & ACTIVATE THE SECTION BELOW (i.e.,):
+#    '#~ NETCDF4 definition of "WGS84.CRS" (& grid) ~...'
+
+    #~ NETCDF4 definition of "LOCAL.CRS" (& grid) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    xoid = field.empty_map(xpace.xs, xpace.ys, WKT_OGC)  # empty array
+    grid = sub_grp.createVariable(sref_name, 'u1')
+    grid.long_name = sref_name
+    grid.crs_wkt = xoid.spatial_ref.attrs['crs_wkt']
+    grid.spatial_ref = xoid.spatial_ref.attrs['crs_wkt']
+    # https://www.simplilearn.com/tutorials/python-tutorial/list-to-string-in-python
+    # https://www.geeksforgeeks.org/how-to-delete-last-n-rows-from-numpy-array/
+    # grid.GeoTransform = ' '.join(map(str, list(xoid.rio.transform())))
+    # # this is apparently the "correct" way to store the GEOTRANSFORM!
+    grid.GeoTransform = ' '.join(
+        map(str, np.roll(np.asarray(xoid.rio.transform()).reshape(3, 3),
+                         shift=1, axis=1)[:-1].ravel().tolist()))  # [:-1] removes last row
+    # [start] from CFCONVENTIONS.ORG ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    grid.grid_mapping_name = 'lambert_azimuthal_equal_area'
+    grid.latitude_of_projection_origin = 5
+    grid.longitude_of_projection_origin = 20
+    grid.false_easting = 0
+    grid.false_northing = 0
+    # grid.horizontal_datum_name = 'WGS84'  # (this can also be un-commented!)
+    grid.reference_ellipsoid_name = 'sphere'
+    # new in CF-1.7 [https://cfconventions.org/wkt-proj-4.html]
+    grid.projected_crs_name = 'WGS84_/_Lambert_Azim_Mozambique'
+    # [ end ] from CFCONVENTIONS.ORG ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # [start] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
+    grid._CoordinateTransformType = 'Projection'
+    grid._CoordinateAxisTypes = 'GeoY GeoX'
+    # [ end ] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
+    # storing local coordinates (Y-axis)
+    yy = sub_grp.createVariable(
+        'projection_y_coordinate', 'i4', dimensions=('y'),
+        chunksizes=CHUNK_3D([len(xpace.ys)], valSize=4),
+        )
+    yy[:] = xpace.ys
+    yy.coordinates = 'projection_y_coordinate'
+    yy.long_name = 'y coordinate of projection'
+    yy._CoordinateAxisType = 'GeoY'
+    yy.grid_mapping = sref_name
+    yy.units = 'meter'
+    # storing local coordinates (X-axis)
+    xx = sub_grp.createVariable(
+        'projection_x_coordinate', 'i4', dimensions=('x'),
+        chunksizes=CHUNK_3D([len(xpace.xs)], valSize=4),
+        )
+    xx[:] = xpace.xs
+    xx.coordinates = 'projection_x_coordinate'
+    xx.long_name = 'x coordinate of projection'
+    xx._CoordinateAxisType = 'GeoX'
+    xx.grid_mapping = sref_name
+    xx.units = 'meter'
+
+    # #~ NETCDF4 definition of "WGS84.CRS" (& grid) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # xoid = field.empty_map(xpace.xs, xpace.ys, WKT_OGC)  # empty array
+    # grid = sub_grp.createVariable(sref_name, 'int')
+    # grid.long_name = sref_name
+    # # [start] RIO.XARRAY defaults for WGS84 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # # alternative (once the module RCRS is properly called)
+    # # grid.crs_wkt = rcrs.CRS.from_epsg(4326).to_wkt()
+    # # grid.spatial_ref = rcrs.CRS.from_epsg(4326).to_wkt()
+    # grid.crs_wkt = pp.crs.CRS(4326).to_wkt()
+    # grid.spatial_ref = pp.crs.CRS(4326).to_wkt()
+    # # the line below ONLY works IF "XOID" was generated in WGS84! (or reprojected to it!)
+    # grid.GeoTransform = ' '.join(map(str, list(xoid.rio.transform())))
+    # grid.grid_mapping_name = 'latitude_longitude'
+    # grid.semi_major_axis = 6378137.
+    # grid.semi_minor_axis = 6356752.314245179
+    # grid.inverse_flattening = 298.257223563
+    # grid.reference_ellipsoid_name = 'WGS 84'
+    # grid.longitude_of_prime_meridian = 0.
+    # grid.prime_meridian_name = 'Greenwich'
+    # grid.geographic_crs_name = 'WGS 84'
+    # # [ end ] RIO.XARRAY defaults for WGS84 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # [start] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
+    # grid._CoordinateAxisTypes = 'Lat Lon'
+    # # [ end ] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
+    # # storing WGS84 coordinates
+    # # https://pyproj4.github.io/pyproj/stable/gotchas.html#upgrading-to-pyproj-2-from-pyproj-1
+    # lat, lon = pp.Transformer.from_proj(
+    #     pp.CRS.from_wkt(WKT_OGC).to_proj4(), 'EPSG:4326').transform(
+    #         np.meshgrid(xpace.xs, xpace.ys)[0],
+    #         np.meshgrid(xpace.xs, xpace.ys)[-1],
+    #         zz=None, radians=False
+    #         )
+    # # (Y-axis)
+    # yy = sub_grp.createVariable(
+    #     'latitude', 'f8', dimensions=('y', 'x'),
+    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
+    #     )
+    # yy[:] = lat
+    # yy.coordinates = 'latitude'
+    # yy.long_name = 'latitude coordinate'
+    # yy._CoordinateAxisType = 'Lat'
+    # yy.grid_mapping = sref_name
+    # yy.units = 'degrees_north'
+    # # (X-axis)
+    # xx = sub_grp.createVariable(
+    #     'longitude', 'f8', dimensions=('y', 'x'),
+    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
+    #     )
+    # xx[:] = lon
+    # xx.coordinates = 'longitude'
+    # xx.long_name = 'longitude coordinate'
+    # xx._CoordinateAxisType = 'Lon'
+    # xx.grid_mapping = sref_name
+    # xx.units = 'degrees_east'
+
+    # store the MASK
+    ncmask = sub_grp.createVariable(
+        'mask', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
+        chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
+        )
+    ncmask[:] = xpace.catchment_mask
+    ncmask.grid_mapping = sref_name
+    ncmask.long_name = 'catchment mask'
+    ncmask.description = '1 means catchment or region : 0 is void'
+    ncmask.coordinates = f'{yy.getncattr("coordinates")} '\
+        f'{xx.getncattr("coordinates")}'
+    # # storing of some XTRA-VARIABLES:
+    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # e.g., "duration"...
+    # ncxtra = sub_grp.createVariable(
+    #     'duration', 'f4', dimensions=('t', 'n'),
+    #     zlib=True, complevel=9, fill_value=np.nan,
+    #     # fill_value=np.r_[0].astype('u2')),
+    #     )
+    # ncxtra.long_name = 'storm duration'
+    # ncxtra.units = 'minutes'
+    # ncxtra.precision = f'{1/60}'  # (1 sec); see last line of 'nc_file_ii'
+    # ncxtra.grid_mapping = sref_name
+    # # ncxtra.scale_factor = dur_SCL  # this would've to be estimated
+    # # ncxtra.add_offset = dur_ADD  # this would've to be estimated
+    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # e.g., "sampled_total"...
+    # iixtra = sub_grp.createVariable(
+    #     'sampled_total', 'f4', dimensions=('n'),
+    #     zlib=True, complevel=9, fill_value=np.nan,
+    #     )
+    # iixtra.long_name = 'seasonal total from PDF'
+    # iixtra.units = 'mm'
+    # iixtra.grid_mapping = sref_name
+    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # # e.g., "k_means"...
+    # # ... i don't think we should provide this variable!
+    # maskxx = sub_grp.createVariable(
+    #     'k_means', datatype='i1', dimensions=('y', 'x'),
+    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
+    #     zlib=True, complevel=9, fill_value=np.array(-1).astype('i1'),
+    #     # least_significant_digit=3
+    #     )
+    # maskxx.grid_mapping = sref_name
+    # maskxx.long_name = 'k-means NREGIONS'
+    # maskxx.description = '-1 indicates region out of any cluster'
+    # maskxx.coordinates = f'{yy.getncattr("coordinates")} '\
+    #     f'{xx.getncattr("coordinates")}'
+
+    return sub_grp, yy.getncattr("coordinates"), xx.getncattr("coordinates")
+
+
+def nc_file_ii(sub_grp, simy, yearz, dateo, ytag, xtag):
+    """
+    filling and closure of the (output) nc-file.\n
+    Input ->
+    *sub_grp* : nc.sub_group; nc variable storing the nsim-run.
+    *simy* : int; iterable of the year of simulation.
+    *yearz* : int; seeed year representing the y-simulation.
+    *dateo* : datetime.datetime; DATE_ORIGIN + TIME_ZONE in datetime format.
+    *tag_y* : char; coords-attribute in the Y-axis.
+    *tag_x* : dict; coords-attribute in the X-axis.\n
+    Output -> nc.sub_group; updated nc variable storing the nsim-run.\n
+    """
+    # define the TIME dimension (& variable)
+    nctnam = f'time_{"{:03d}".format(simy + 1)}'  # for less than 1000 years
+    sub_grp.createDimension(nctnam, None)
+    timexx = sub_grp.createVariable(
+        nctnam, TIMEINT, (nctnam), fill_value=TIMEFIL,
+        )
+    timexx.long_name = 'starting time'
+    timexx.units = f"{TIME_OUTNC} since {dateo.strftime('%Y-%m-%d %H:%M:%S')}"
+    # timexx.units = f"{TIME_OUTNC} since {dateo.strftime('%Y-%m-%d %H:%M:%S %Z%z')}"
+    timexx.calendar = 'proleptic_gregorian'  # 'gregorian'
+    timexx._CoordinateAxisType = 'Time'
+    timexx.coordinates = nctnam
+    # define the RAINFALL variable
+    ncvnam = f'year_{yearz + simy}'
+    if RAINFMT[0] == 'f':
+        # DOING.FLOATS
+        ncvarx = sub_grp.createVariable(
+            ncvnam, datatype=f'{RAINFMT}', dimensions=(nctnam, 'y', 'x'),
+            zlib=True, complevel=9, least_significant_digit=3, fill_value=np.nan,
+            )
+    else:
+        # DOING.INTEGERS
+        ncvarx = sub_grp.createVariable(
+            ncvnam, datatype=f'{RAINFMT}', dimensions=(nctnam, 'y', 'x'),
+            zlib=True, complevel=9,
+            fill_value=np.array(0).astype(f'{RAINFMT}'),  # 0 is filling!
+            )
+    ncvarx.precision = PRECISION
+    ncvarx.long_name = 'rainfall'
+    ncvarx.units = 'mm'
+    ncvarx.grid_mapping = sub_grp['spatial_ref'].long_name
+    ncvarx.coordinates = f'{ytag} {xtag}'
+    # # define & fill some other XTRA variable (set up previously in "nc_file_i")
+    # # ... XTRA, XTRAn, etc. should be passed to this function
+    # # 'f4' guarantees 1-second (1/60 -minute) precision
+    # sub_grp.variables['duration'][:, simy] = ((XTRA * 60).round(0) / 60).astype('f4')
+    # # # https://stackoverflow.com/a/28425782/5885810  (round to the nearest-nth)
+    # # sub_grp.variables['duration'][:, simy] =\
+    # #     list(map(lambda x: round(x / (1 / 60)) * (1 / 60), XTRA))
+    # sub_grp.variables['sampled_total'][simy] = XTRA2.astype('f4')
+    return sub_grp
+
 
 # %% something xtra
 
@@ -266,7 +619,7 @@ def regionalisation(file_zon, tag, xpace):
     # k-means for free
     # k_means = region_to_numpy(reg_shp, xpace)
     k_means = masking.shapsterize(
-        reg_shp.to_json(), xpace.x_res, Y_RES, -1, tag,
+        reg_shp.to_json(), xpace.x_res, xpace.x_res, -1, tag,
         [xpace.bbbox[i] for i in ['l', 'b', 'r', 't']],
         pp.CRS.from_wkt(xpace.wkt_prj).to_proj4(),
         )
@@ -821,11 +1174,7 @@ def quantum_time(doy_par, tod_par, DUR_S, n, simy):
     return mates, s_cal
 
 
-# %% other block
-
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#- RASTER MANIPULATION ----------------------------------------------- (START) #
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# %% raster manipulation
 
 def last_ring(radii, centres, **kwargs):
 # radii=RADII[0]; centres=M_CENT[0]
@@ -841,7 +1190,7 @@ def last_ring(radii, centres, **kwargs):
     Output -> geopandas.GeoDataFrame with circular polygons of storm-max-radii.
     """
     scal = kwargs.get('scaling_dis', 1e3)
-    brad = kwargs.get('base_radius', MINRADIUS)
+    brad = kwargs.get('base_radius', minmax_radius)
     nons = kwargs.get('nonsense', 2)
     # # slower approach
     # ring_last = list(map(lambda c, r: gpd.GeoDataFrame(
@@ -854,94 +1203,148 @@ def last_ring(radii, centres, **kwargs):
     # geom = geom.buffer(radii * scal, resolution=8*2)
     ring_last = gpd.GeoDataFrame(geometry=geom, crs=WKT_OGC)
     # "resolution": number of segments in which 1/4.of.a.circle is divided into.
-    # (now) it depends on the RADII/MINRADIUS; the larger a circle the higher its resolution.
+    # (now) it depends on the RADII/minmax_radius; the larger a circle the higher its resolution.
     return ring_last
 
 
-# %% others
+# def LOTR( RADII, MAX_I, DUR_S, BETAS, CENTS ):
+#     all_radii = list(map(lambda r:
+#         np.r_[np.arange(r, 0.15, -10.1), 0.15], RADII))
 
-#~ CREATE CIRCULAR SHPs (RINGS & CIRCLE) & ASSING RAINFALL TO C.RINGS ~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def LOTR( RADII, MAX_I, DUR_S, BETAS, CENTS ):
-    all_radii = list(map(lambda r:
-        np.r_[np.arange(r, 0.15, -10.1), 0.15], RADII))
+#     all_rain = list(map(lambda i,d,b,r: list(map( lambda r:
+#     # # model: FORCE_BRUTE -> a * np.exp(-2 * b * x**2)
+#     #     i * d *1/60 * np.exp( -2* b * r**2 ), r)), MAX_I, DUR_S, BETAS, all_radii))
+#     # model: BRUTE_FORCE -> a * np.exp(-2 * b**2 * x**2)
+#         i * d *1/60 * np.exp( -2* b**2 * r**2 ), r)), MAX_I, DUR_S, BETAS, all_radii))
 
-    all_rain = list(map(lambda i,d,b,r: list(map( lambda r:
-    # # model: FORCE_BRUTE -> a * np.exp(-2 * b * x**2)
-    #     i * d *1/60 * np.exp( -2* b * r**2 ), r)), MAX_I, DUR_S, BETAS, all_radii))
-    # model: BRUTE_FORCE -> a * np.exp(-2 * b**2 * x**2)
-        i * d *1/60 * np.exp( -2* b**2 * r**2 ), r)), MAX_I, DUR_S, BETAS, all_radii))
+# # BUFFER_STRINGS
+# # https://www.knowledgehut.com/blog/programming/python-map-list-comprehension
+# # https://stackoverflow.com/a/30061049/5885810  (map nest)
+# # r,p are lists (at first instance), and the numbers/atoms (in the second lambda)
+# # .boundary gives the LINESTRING element
+# # *1e3 to go from km to m
+# # np.ceil(r /minmax_radius) +2 ) is an artifact to lower the resolution of small circles
+# # ...a lower resolution in such circles increases the script.speed in the rasterisation process.
+#     rain_ring = list(map(lambda c,r,p: pd.concat( list(map(lambda r,p: gpd.GeoDataFrame(
+#         {'rain':p, 'geometry':gpd.points_from_xy( x=[c[0]], y=[c[1]] ).buffer( r *1e3,
+#             # resolution=int((3 if r < 1 else 2)**np.ceil(r /2)) ).boundary},
+#             # resolution=np.ceil(r /minmax_radius) +1 ).boundary}, # or maybe... "+1"??
+#             resolution=np.ceil(r /minmax_radius) +2 ).boundary}, # or maybe... "+2"??
+#         crs=WKT_OGC) , r, p)) ), CENTS, all_radii, all_rain))
+# # # the above approach (in theory) is much? faster than the list.comprehension below
+# #     rain_ring = [pd.concat( gpd.GeoDataFrame({'rain':p, 'geometry':gpd.points_from_xy(
+# #         x=[c[0]], y=[c[1]] ).buffer(r *1e3, np.ceil(r /minmax_radius) +2 ).boundary},
+# #         crs=WKT_OGC) for p,r in zip(p,r) ) for c,r,p in zip(CENTS, all_radii, all_rain)]
 
-# BUFFER_STRINGS
-# https://www.knowledgehut.com/blog/programming/python-map-list-comprehension
-# https://stackoverflow.com/a/30061049/5885810  (map nest)
-# r,p are lists (at first instance), and the numbers/atoms (in the second lambda)
-# .boundary gives the LINESTRING element
-# *1e3 to go from km to m
-# np.ceil(r /MINRADIUS) +2 ) is an artifact to lower the resolution of small circles
-# ...a lower resolution in such circles increases the script.speed in the rasterisation process.
-    rain_ring = list(map(lambda c,r,p: pd.concat( list(map(lambda r,p: gpd.GeoDataFrame(
-        {'rain':p, 'geometry':gpd.points_from_xy( x=[c[0]], y=[c[1]] ).buffer( r *1e3,
-            # resolution=int((3 if r < 1 else 2)**np.ceil(r /2)) ).boundary},
-            # resolution=np.ceil(r /MINRADIUS) +1 ).boundary}, # or maybe... "+1"??
-            resolution=np.ceil(r /MINRADIUS) +2 ).boundary}, # or maybe... "+2"??
-        crs=WKT_OGC) , r, p)) ), CENTS, all_radii, all_rain))
-# # the above approach (in theory) is much? faster than the list.comprehension below
-#     rain_ring = [pd.concat( gpd.GeoDataFrame({'rain':p, 'geometry':gpd.points_from_xy(
-#         x=[c[0]], y=[c[1]] ).buffer(r *1e3, np.ceil(r /MINRADIUS) +2 ).boundary},
-#         crs=WKT_OGC) for p,r in zip(p,r) ) for c,r,p in zip(CENTS, all_radii, all_rain)]
+#     return rain_ring
 
+
+def lotr(radius, decay, i0, lapse, centre, **kwargs):
+# radius=RADII[-1][0]; decay=BETA[-1][0]; i0=MAX_I[-1][0]; lapse=STRIDE[-1][0]; centre=M_CENT[-1][0]
+    """
+    creates circular rain.rings evenly spaced from the storm.centre outwards.\n
+    Input ->
+    *radius* : numpy; float numpy of storm-radius (in km).
+    *decay* : numpy; float numpy of radial-decay (in 1/km).
+    *i0* : numpy; float numpy of maximum storm intesity (in mm/h).
+    *lapse* : numpy; float numpy of the actual raining time-lapse (in h).
+    *centre* : numpy; 2D-numpy with the X-Y of storm center.\n
+    **kwargs ->
+    scaling_dis : float; scaling factor between radius-units and m (1000m==1km).
+    res : int; number of segments in which a circle.quadrant is divided into.
+    dot_size: float; circle's radius emulating the storm centre's point/dot.
+    sep_ring: float; separation (in km) between rainfall rings.\n
+    Output -> geopandas.GeoDataFrame with linestings of circular.rain from centre.
+    """
+    scal = kwargs.get('scaling_dis', 1e3)
+    res = kwargs.get('res', 13)
+    sdot = kwargs.get('dot_size', 0.15)
+    sep = kwargs.get('sep_ring',  minmax_radius * (2) + .1)  # 10.1
+    # c_radii = np.append(np.arange(radius, sdot, - sep), sdot)
+    c_radii = np.concatenate(
+        (np.arange(radius, sdot, - sep), np.array([sdot])))
+    # rainfall [in mm] for every c_radii
+    c_rain = i0 * lapse * np.exp(-2 * decay**2 * c_radii**2)  # in mm!!
+
+    # buffer_strings
+    # https://www.knowledgehut.com/blog/programming/python-map-list-comprehension
+    # https://stackoverflow.com/a/30061049/5885810  (map nest)
+    # .boundary gives the LINESTRING element
+    geom = gpd.points_from_xy(x=[centre[0]], y=[centre[1]])
+    geom = geom.buffer(c_radii * scal, resolution=res).boundary
+    rain_ring = gpd.GeoDataFrame({'rain': c_rain,'geometry':geom}, crs=WKT_OGC)
+    # rain_ring.iloc[0].geometry  # rain_ring.iloc[-1].geometry
     return rain_ring
 
 
-#~ RASTERIZE SHPs & INTERPOLATE RAINFALL (between rings) ~~~~~~~~~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def RASTERIZE( ALL_RINGS ):# posx=23; ALL_RINGS=RINGS[posx]
-# burn the ALL_RINGS
-    tmp = gdal.Rasterize('', ALL_RINGS.to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
-        attribute='rain', noData=0, outputType=gdal.GDT_Float64, targetAlignedPixels=True,
-        outputBounds=[llim, blim, rlim, tlim], outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4(), format='MEM')
-        #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
-    fall = tmp.ReadAsArray()
-    tmp = None
-    # gdal.Unlink('the_tmpfile.tif')
-# burn the mask
-# convert LINESTRING to POLYGON (in shapely). ".iloc[0]" for the largest/outter RADII
-# https://stackoverflow.com/a/2975194/5885810
-    OUTER_RING = ( ALL_RINGS.geometry.iloc[0] ).convex_hull
-# create a GEOPANDAS from a SHAPELY so you can JSON.it
-# https://stackoverflow.com/a/51520122/5885810
-    tmp = gdal.Rasterize('',
-        gpd.GeoSeries([ OUTER_RING ]).to_json(), xRes=X_RES, yRes=Y_RES, allTouched=True,
-        burnValues=1, noData=0, outputType=gdal.GDT_Int16, targetAlignedPixels=True,
-        outputBounds=[llim, blim, rlim, tlim], outputSRS=pp.CRS.from_wkt(WKT_OGC).to_proj4(), format='MEM')
-        #, width=int(abs(rlim-llim)/X_RES), height=int(abs(tlim-blim)/X_RES) )
-    mask = tmp.ReadAsArray()
-    tmp = None
-# re-touching the mask...to do a proper interpolation
-    mask[np.where(fall!=0)] = 0
-# everything that is 1 is interpolated
-    fill.fillnodata(np.ma.array(fall, mask=mask), mask=None, max_search_distance=4.0, smoothing_iterations=2)
-    return fall
+def rasterize(ring_set, outer_ring, xpace):
+# ring_set=c_ring[100]; outer_ring=last_r[100]; xpace=SPACE
+    """
+    rasterize linerings/polygons and interpolate rainfall (between rings).\n
+    Input ->
+    *ring_set* : geopandas.GeoDataFrame; linerings geometry with rain.
+    *xpace* : class; class where spatial variables are defined.\n
+    Output -> 2D-numpy of floats representing a circular storm.
+    """
+    # burn the 'ring_set' (for one storm-centre)
+    fall = masking.shapsterize(
+        ring_set.to_json(), xpace.x_res, xpace.x_res, 0, 'rain',
+        [xpace.bbbox[i] for i in ['l', 'b', 'r', 't']],
+        pp.CRS.from_wkt(xpace.wkt_prj).to_proj4(), outputType=gdal.GDT_Float32,
+        )
+    # plt.imshow(fall, interpolation=None, origin='upper', cmap='turbo')
+
+    # burn the mask (create a GEOPANDAS from a SHAPELY so you can JSON.it)
+    out_frame = gpd.GeoDataFrame(geometry=outer_ring)
+    out_frame['burn'] = 1
+    # https://stackoverflow.com/a/51520122/5885810
+    mask = masking.shapsterize(
+        # gpd.GeoDataFrame({'burn': [1], 'geometry': outer_ring}).to_json(),
+        out_frame.to_json(), xpace.x_res, xpace.x_res, 0, 'burn',
+        [xpace.bbbox[i] for i in ['l', 'b', 'r', 't']],
+        pp.CRS.from_wkt(xpace.wkt_prj).to_proj4(), add=False,
+        # outputType=gdal.GDT_Int16,
+        )
+
+    # re-touching the mask to do a proper interpolation
+    mask[fall != 0.] = 0
+    # everything that is 1 is interpolated
+    fill.fillnodata(np.ma.array(fall, mask=mask), mask=None,
+                    max_search_distance=4., smoothing_iterations=2)
+    # # plotting checking:
+    # xr.DataArray(fall[5:75, 150:220]).plot(cmap='gist_ncar_r', levels=22, vmax=0.525,)
+    # xr.DataArray(fall[5:75, 150:220]).plot(cmap='gist_ncar_r', robust=True, vmin=0,)
+
+    # pass filter ('gaussian' slightly faster than 'uniform')
+    # f_filter = uniform_filter(fall, size=3, mode='constant', cval=0)
+    f_filter = gaussian_filter(fall, sigma=2, mode='constant', cval=0, radius=1)
+    # because filtering averages.down the field, select maxima between...
+    ok_field = np.maximum(fall, f_filter)
+
+    # # plot testing: (slices subjective to the data you're testing here)
+    # fig = plt.figure(dpi=150)
+    # xs = np.arange(155, 215, 1)
+    # xv = (slice(44, 45), slice(155, 215))
+    # xs = np.arange(167, 180, 1)
+    # xv = (slice(25, 26), slice(167, 180))
+    # plt.step(xs, fall[xv].ravel(), where='mid', color='r', lw=2, zorder=3)
+    # plt.step(xs, ok_field[xv].ravel(), where='mid', color='b', lw=4, zorder=1)
+    # plt.show()
+
+    return ok_field
+
+
+
+
+
+
+
 
 
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- RASTER MANIPULATION ------------------------------------------------- (END) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
-
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#- MISCELLANEOUS TO TIME-DISCRETIZATION ------------------------------ (START) #
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-
-
-
-
-
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-#- MISCELLANEOUS TO TIME-DISCRETIZATION -------------------------------- (END) #
-#-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 
 # %% xttras 1
@@ -961,19 +1364,13 @@ def RASTERIZE( ALL_RINGS ):# posx=23; ALL_RINGS=RINGS[posx]
 #     return d_bool
 
 
-# #~ UPSCALE A LIST [GIVENG A VECTOR OF 'REPETITVE' VALUES/PATTERNS] ~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def XPAND( LIZT, NREP ):# NREP=i_scaling
-#     return list(map(lambda x:np.repeat(x, list(map(len, NREP))), LIZT))
-
-
-def moving_storm(dir_par, vel_par, i_scaling, centres, **kwargs):
+def moving_storm(dir_par, vel_par, stridin, centres, **kwargs):
     """
     samples storm direction and velocity; and moves storm initial centres along.\n
     Input ->
     *dir_par* : dic; vonMises-Fisher mixture-parameters for storm-direction.
     *vel_par* : dict; contains a scipy.stats (pdf) frozen infrastructure.
-    *i_scaling* : list; numpys list with time-quantization per storm.
+    *stridin* : list; numpys list with time-quantization per storm.
     *centres* : numpy; 2D-numpy with the X-Y's of storm initial centers.\n
     **kwargs ->
     speed_lim : tuple; variable limits to sample within.
@@ -985,7 +1382,7 @@ def moving_storm(dir_par, vel_par, i_scaling, centres, **kwargs):
     s_stat = kwargs.get('speed_stat', "transpose")
 
     # sampling storm direction (in m/s)
-    i_lens = list(map(len, i_scaling))
+    i_lens = list(map(len, stridin))
     wspeed = faster_sampling(vel_par, limits=s_lims, n=np.sum(i_lens))
     wspeed = np.split(wspeed, np.array(i_lens).cumsum()[:-1])
     # storm direction (already as azimuth)
@@ -993,7 +1390,7 @@ def moving_storm(dir_par, vel_par, i_scaling, centres, **kwargs):
     azimut = cs_dir.samples(len(i_lens), data_type='dir')
 
     # displace the storm_centres
-    pad_i = list(map(lambda x: np.concat(([0], x[:-1])), i_scaling))
+    pad_i = list(map(lambda x: np.concat(([0], x[:-1])), stridin))
     # update 'wspeed' to 's_stat'
     # wspeed = wspeed if s_stat is None else list(map(eval(f'np.{s_stat}'), wspeed))
     wspeed = list(map(eval(f'np.{s_stat}'), wspeed))
@@ -1071,7 +1468,7 @@ def SORT_CUBE( CUBO, DATO ):
 
 #~ SORTING THE.CUBE BY TIMESTAMPS [& AGGRETATING RAIN] & REMOVING VOID.FIELDS ~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def RAIN_CUBO( STORM_MATRIX, M_S, mate, NP_MASK ):# M_S=np.concatenate(i_scaling); mate=MATES
+def RAIN_CUBO( STORM_MATRIX, M_S, mate, NP_MASK ):# M_S=np.concatenate(STRIDE); mate=MATES
     tot_pix = NP_MASK.sum()             # pixels in mask
 # squeeze the storms...
 # here is where the 'proportionality'.multiplication happens
@@ -1147,7 +1544,7 @@ if the objective is REACHING the (granular) MEDIAN; something else has to be tho
     # from matplotlib.patches import Circle
 
     # posx = 23#32#9
-    # # first do 'fall' and/or 'mask' in RASTERIZE
+    # # first do 'fall' and/or 'mask' in rasterize
     # da = xr.DataArray(data=fall, dims=['y','x'], coords={'x':XS, 'y':YS},)
     # pa = xr.DataArray(data=mask, dims=['y','x'], coords={'x':XS, 'y':YS},)
     # # FIND YOUR SLICES
@@ -1182,366 +1579,6 @@ if the objective is REACHING the (granular) MEDIAN; something else has to be tho
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #- EXTRA-CHUNK OF MISCELLANEOUS FUNCTIONS ------------------------------ (END) #
 #-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
-
-# %% nc-file creation
-
-def round_x(x, prec=3, base=PRECISION):
-    """
-    custom rounding to a specific base.\n
-    Input ->
-    *x* : float or np.array.\n
-    **kwargs ->
-    prec : int; significative digits.
-    base : float; rounding precision (resolution).\n
-    Output -> rounded float/np.array to the given precision/base.
-    """
-    # # https://stackoverflow.com/a/18666678/5885810
-    return (base * (np.array(x) / base).round()).round(prec)
-
-
-def nc_bytes():
-    """
-    scales 'down' floats to integers.\n
-    Input: none.\n
-    Output (sets up the following globals) ->
-    SCL : float; multiplicative scaling factor.
-    ADD : float; additive scaling factor.
-    MINIMUM : int; minimum integer allowed.
-    iMAX: float; maximum allowed float (for rainfall).\n
-    """
-    global SCL, ADD, MINIMUM, iMAX
-
-    # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
-    # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
-    INTEGER = int(RAINFMT[-1])
-    MINIMUM = 1  # 1 because i need 0 for filling
-    MAXIMUM = +(2**(INTEGER * 8)) - 1  # 65535 (largest unsigned 16bits-int; 0 also counts)
-    # MAXIMUM = +(2**(4 * 8)) - 1  # 4294967296 (largest unsigned 32bits-int)
-    # # if RAINFMT=='i2' (signed 16bit-int)
-    # MINIMUM = -(2**(INTEGER * 8 - 1))  # -32768 (smallest signed 16bits-int)
-    # MAXIMUM = +(2**(INTEGER * 8 - 1) -1)  # +32767 (largest signed 16bits-int)
-
-    # NORMALIZING THE RAINFALL SO IT CAN BE STORED AS 16-BIT INTEGER
-    # https://stackoverflow.com/a/59193141/5885810  (scaling 'integers')
-    # https://stats.stackexchange.com/a/70808/354951  (normalize data 0-1)
-    iMIN = 0.
-# # run your own (customized) tests
-# temp = 3.14159
-# epsilon = [0.006, 0.005, 0.004, 0.003, 0.002, 0.001, .01]
-# for epsn in epsilon:
-#     seed = 1500
-#     while temp > epsn:
-#         temp = (seed - iMIN) / (MAXIMUM - MINIMUM - 1)
-#         seed -= 1
-#     print(f'starting in {iMIN}, you\'d need a max. of '\
-#           f'~{seed + 1} to guarantee an epsilon of {epsn}')
-# # starting in 0.0, you'd need a max. of ~ 393 to guarantee an epsilon of 0.006
-# # starting in 0.0, you'd need a max. of ~ 327 to guarantee an epsilon of 0.005
-# # starting in 0.0, you'd need a max. of ~ 262 to guarantee an epsilon of 0.004
-# # starting in 0.0, you'd need a max. of ~ 196 to guarantee an epsilon of 0.003
-# # starting in 0.0, you'd need a max. of ~ 131 to guarantee an epsilon of 0.002
-# # starting in 0.0, you'd need a max. of ~  65 to guarantee an epsilon of 0.001
-# # starting in 0.0, you'd need a max. of ~1501 to guarantee an epsilon of 0.01
-# # starting in 0.0, you'd need a max. of: 429496 to guarantee an epsilon of 0.0001  # (for INTEGER==4)
-    # if you want a larger precision (or your variable is in the 'low' scale,
-    # ...say Summer Temperatures in Celsius) you must/could lower this limit.
-    iMAX = PRECISION * (MAXIMUM - MINIMUM -1) + iMIN
-    # 131.066 -> for MINIMUM==1
-    # 131.068 -> for MINIMUM==0
-    SCL = (iMAX - iMIN) / (MAXIMUM - MINIMUM - 1) # -1 because 0 doesn't count
-    ADD = iMIN - SCL * MINIMUM
-# # testing
-# allv = PRECISION * (np.linspace(MINIMUM, MAXIMUM - 1, MAXIMUM - 1) - 1) + iMIN
-# # allv = np.arange(iMIN, iMAX + PRECISION, PRECISION)
-# allv.shape  # (65534,)
-# allv[-1] == iMAX  # np.True_
-# allt = ((allv - ADD) / SCL).round(0).astype(RAINFMT)
-# # am i missing some value because of rounding??
-# np.flatnonzero(np.diff(allt) != 1)  # array([], dtype=int64)
-# vall = ((allt * SCL) + ADD).round(4)
-# voll = round_x((allt * SCL) + ADD).round(4)
-# (vall == voll).all()  # np.True_
-    # if storing as FLOAT
-    if RAINFMT[0] == 'f':
-        SCL = 1.
-        ADD = 0.
-        MINIMUM = 0.
-    # return SCL, ADD, MINIMUM, iMAX
-
-
-def nc_file_i(nc, nsim, xpace, **kwargs):
-    """
-    skeleton of the (output) nc-file.\n
-    Input ->
-    *nc* : char; output path of nc-file.
-    *nsim* : int; iterable of simulation.
-    *xpace* : class; class where spatial variables are defined.\n
-    **kwargs ->
-    sref_name : char; name of the variable storing the CRS.\n
-    Output ->
-    sub_grp : nc.sub_group; nc variable storing the nsim-run.
-    tag_y : char; coords-attribute in the Y-axis.
-    tag_x : dict; coords-attribute in the X-axis.\n
-    """
-    sref_name = kwargs.get('sref_name', 'spatial_ref')
-
-    # define SUB.GROUP and its dimensions
-    sub_grp = nc.createGroup(f'run_{"{:02d}".format(nsim + 1)}')
-    sub_grp.createDimension('y', len(xpace.ys))
-    sub_grp.createDimension('x', len(xpace.xs))
-    sub_grp.createDimension('n', NUMSIMYRS)
-
-    """
-LOCAL.CRS (netcdf definition)
------------------------------
-Customization of these parameters for your local CRS is relatively easy!.
-All you have to do is to 'convert' the PROJ4 (string) parameters of your (local)
-projection into CF conventions.
-The following links offer you a guide on how to do so,
-and the conventions between CF & PROJ4 & WKT:
-# https://cfconventions.org/wkt-proj-4.html
-# http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#appendix-grid-mappings
-# http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#_trajectories
-# https://spatialreference.org/
-In this case, the PROJ4.string (from the WKT) is:
-    pp.CRS.from_wkt(WKT_OGC).to_proj4(); (or) pp.CRS.from_epsg(EPSG).to_proj4()
-    '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +ellps=sphere +units=m +no_defs +type=crs'
-which is very similar to the one provided by ISRIC/andresQuichimbo:
-    '+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs'
-The amount (and type) of parameters will vary depending on your local CRS. For
-instance [http://cfconventions.org/Data/cf-conventions/cf-conventions-1.7/cf-conventions.html#lambert-azimuthal-equal-area],
-The LAEA (lambert_azimuthal_equal_area) system requieres 4 parameters:
-    longitude_of_projection_origin, latitude_of_projection_origin,
-    false_easting, & false_northing
-which correspond to PROJ4 parameters [https://cfconventions.org/wkt-proj-4.html]:
-    +lon_0, +lat_0, +x_0, +y_0
-The use of PROJ4 is now being discouraged (https://inbo.github.io/tutorials/tutorials/spatial_crs_coding/).
-Neverthelesss, and for now, it still works under this framework to store data
-in the local CRS, and at the same time be able to visualize it in WGS84
-(via, e.g., https://www.giss.nasa.gov/tools/panoply/) without the need to
-transform (and store) local coordinates into Lat-Lon.
-[02/08/23] We now use RIOXARRAY to "attach" the CRS, and establish some common
-parameters to generate some consistency when reading future? random rain-fields.
-    """
-# IF FOR SOME REASON YOU'D PREFER TO STORE YOUR DATA IN WGS84...
-# COMMENT OUT THE FOLLOWING SECTION & ACTIVATE THE SECTION BELOW (i.e.,):
-#    '#~ NETCDF4 definition of "WGS84.CRS" (& grid) ~...'
-
-    #~ NETCDF4 definition of "LOCAL.CRS" (& grid) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    xoid = field.empty_map(xpace.xs, xpace.ys, WKT_OGC)  # empty array
-    grid = sub_grp.createVariable(sref_name, 'u1')
-    grid.long_name = sref_name
-    grid.crs_wkt = xoid.spatial_ref.attrs['crs_wkt']
-    grid.spatial_ref = xoid.spatial_ref.attrs['crs_wkt']
-    # https://www.simplilearn.com/tutorials/python-tutorial/list-to-string-in-python
-    # https://www.geeksforgeeks.org/how-to-delete-last-n-rows-from-numpy-array/
-    # grid.GeoTransform = ' '.join(map(str, list(xoid.rio.transform())))
-    # # this is apparently the "correct" way to store the GEOTRANSFORM!
-    grid.GeoTransform = ' '.join(
-        map(str, np.roll(np.asarray(xoid.rio.transform()).reshape(3, 3),
-                         shift=1, axis=1)[:-1].ravel().tolist()))  # [:-1] removes last row
-    # [start] from CFCONVENTIONS.ORG ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    grid.grid_mapping_name = 'lambert_azimuthal_equal_area'
-    grid.latitude_of_projection_origin = 5
-    grid.longitude_of_projection_origin = 20
-    grid.false_easting = 0
-    grid.false_northing = 0
-    # grid.horizontal_datum_name = 'WGS84'  # (this can also be un-commented!)
-    grid.reference_ellipsoid_name = 'sphere'
-    # new in CF-1.7 [https://cfconventions.org/wkt-proj-4.html]
-    grid.projected_crs_name = 'WGS84_/_Lambert_Azim_Mozambique'
-    # [ end ] from CFCONVENTIONS.ORG ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # [start] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
-    grid._CoordinateTransformType = 'Projection'
-    grid._CoordinateAxisTypes = 'GeoY GeoX'
-    # [ end ] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
-    # storing local coordinates (Y-axis)
-    yy = sub_grp.createVariable(
-        'projection_y_coordinate', 'i4', dimensions=('y'),
-        chunksizes=CHUNK_3D([len(xpace.ys)], valSize=4),
-        )
-    yy[:] = xpace.ys
-    yy.coordinates = 'projection_y_coordinate'
-    yy.long_name = 'y coordinate of projection'
-    yy._CoordinateAxisType = 'GeoY'
-    yy.grid_mapping = sref_name
-    yy.units = 'meter'
-    # storing local coordinates (X-axis)
-    xx = sub_grp.createVariable(
-        'projection_x_coordinate', 'i4', dimensions=('x'),
-        chunksizes=CHUNK_3D([len(xpace.xs)], valSize=4),
-        )
-    xx[:] = xpace.xs
-    xx.coordinates = 'projection_x_coordinate'
-    xx.long_name = 'x coordinate of projection'
-    xx._CoordinateAxisType = 'GeoX'
-    xx.grid_mapping = sref_name
-    xx.units = 'meter'
-
-    # #~ NETCDF4 definition of "WGS84.CRS" (& grid) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # xoid = field.empty_map(xpace.xs, xpace.ys, WKT_OGC)  # empty array
-    # grid = sub_grp.createVariable(sref_name, 'int')
-    # grid.long_name = sref_name
-    # # [start] RIO.XARRAY defaults for WGS84 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # # # alternative (once the module RCRS is properly called)
-    # # grid.crs_wkt = rcrs.CRS.from_epsg(4326).to_wkt()
-    # # grid.spatial_ref = rcrs.CRS.from_epsg(4326).to_wkt()
-    # grid.crs_wkt = pp.crs.CRS(4326).to_wkt()
-    # grid.spatial_ref = pp.crs.CRS(4326).to_wkt()
-    # # the line below ONLY works IF "XOID" was generated in WGS84! (or reprojected to it!)
-    # grid.GeoTransform = ' '.join(map(str, list(xoid.rio.transform())))
-    # grid.grid_mapping_name = 'latitude_longitude'
-    # grid.semi_major_axis = 6378137.
-    # grid.semi_minor_axis = 6356752.314245179
-    # grid.inverse_flattening = 298.257223563
-    # grid.reference_ellipsoid_name = 'WGS 84'
-    # grid.longitude_of_prime_meridian = 0.
-    # grid.prime_meridian_name = 'Greenwich'
-    # grid.geographic_crs_name = 'WGS 84'
-    # # [ end ] RIO.XARRAY defaults for WGS84 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # # [start] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
-    # grid._CoordinateAxisTypes = 'Lat Lon'
-    # # [ end ] from https://publicwiki.deltares.nl/display/NETCDF/Coordinates ~~~
-    # # storing WGS84 coordinates
-    # # https://pyproj4.github.io/pyproj/stable/gotchas.html#upgrading-to-pyproj-2-from-pyproj-1
-    # lat, lon = pp.Transformer.from_proj(
-    #     pp.CRS.from_wkt(WKT_OGC).to_proj4(), 'EPSG:4326').transform(
-    #         np.meshgrid(xpace.xs, xpace.ys)[0],
-    #         np.meshgrid(xpace.xs, xpace.ys)[-1],
-    #         zz=None, radians=False
-    #         )
-    # # (Y-axis)
-    # yy = sub_grp.createVariable(
-    #     'latitude', 'f8', dimensions=('y', 'x'),
-    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
-    #     )
-    # yy[:] = lat
-    # yy.coordinates = 'latitude'
-    # yy.long_name = 'latitude coordinate'
-    # yy._CoordinateAxisType = 'Lat'
-    # yy.grid_mapping = sref_name
-    # yy.units = 'degrees_north'
-    # # (X-axis)
-    # xx = sub_grp.createVariable(
-    #     'longitude', 'f8', dimensions=('y', 'x'),
-    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
-    #     )
-    # xx[:] = lon
-    # xx.coordinates = 'longitude'
-    # xx.long_name = 'longitude coordinate'
-    # xx._CoordinateAxisType = 'Lon'
-    # xx.grid_mapping = sref_name
-    # xx.units = 'degrees_east'
-
-    # store the MASK
-    ncmask = sub_grp.createVariable(
-        'mask', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
-        chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
-        )
-    ncmask[:] = xpace.catchment_mask
-    ncmask.grid_mapping = sref_name
-    ncmask.long_name = 'catchment mask'
-    ncmask.description = '1 means catchment or region : 0 is void'
-    ncmask.coordinates = f'{yy.getncattr("coordinates")} '\
-        f'{xx.getncattr("coordinates")}'
-    # # storing of some XTRA-VARIABLES:
-    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # # e.g., "duration"...
-    # ncxtra = sub_grp.createVariable(
-    #     'duration', 'f4', dimensions=('t', 'n'),
-    #     zlib=True, complevel=9, fill_value=np.nan,
-    #     # fill_value=np.r_[0].astype('u2')),
-    #     )
-    # ncxtra.long_name = 'storm duration'
-    # ncxtra.units = 'minutes'
-    # ncxtra.precision = f'{1/60}'  # (1 sec); see last line of 'nc_file_ii'
-    # ncxtra.grid_mapping = sref_name
-    # # ncxtra.scale_factor = dur_SCL  # this would've to be estimated
-    # # ncxtra.add_offset = dur_ADD  # this would've to be estimated
-    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # # e.g., "sampled_total"...
-    # iixtra = sub_grp.createVariable(
-    #     'sampled_total', 'f4', dimensions=('n'),
-    #     zlib=True, complevel=9, fill_value=np.nan,
-    #     )
-    # iixtra.long_name = 'seasonal total from PDF'
-    # iixtra.units = 'mm'
-    # iixtra.grid_mapping = sref_name
-    # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # # e.g., "k_means"...
-    # # ... i don't think we should provide this variable!
-    # maskxx = sub_grp.createVariable(
-    #     'k_means', datatype='i1', dimensions=('y', 'x'),
-    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
-    #     zlib=True, complevel=9, fill_value=np.array(-1).astype('i1'),
-    #     # least_significant_digit=3
-    #     )
-    # maskxx.grid_mapping = sref_name
-    # maskxx.long_name = 'k-means NREGIONS'
-    # maskxx.description = '-1 indicates region out of any cluster'
-    # maskxx.coordinates = f'{yy.getncattr("coordinates")} '\
-    #     f'{xx.getncattr("coordinates")}'
-
-    return sub_grp, yy.getncattr("coordinates"), xx.getncattr("coordinates")
-
-
-def nc_file_ii(sub_grp, simy, yearz, dateo, ytag, xtag):
-    """
-    filling and closure of the (output) nc-file.\n
-    Input ->
-    *sub_grp* : nc.sub_group; nc variable storing the nsim-run.
-    *simy* : int; iterable of the year of simulation.
-    *yearz* : int; seeed year representing the y-simulation.
-    *dateo* : datetime.datetime; DATE_ORIGIN + TIME_ZONE in datetime format.
-    *tag_y* : char; coords-attribute in the Y-axis.
-    *tag_x* : dict; coords-attribute in the X-axis.\n
-    Output -> nc.sub_group; updated nc variable storing the nsim-run.\n
-    """
-    # define the TIME dimension (& variable)
-    nctnam = f'time_{"{:03d}".format(simy + 1)}'  # for less than 1000 years
-    sub_grp.createDimension(nctnam, None)
-    timexx = sub_grp.createVariable(
-        nctnam, TIMEINT, (nctnam), fill_value=TIMEFIL,
-        )
-    timexx.long_name = 'starting time'
-    timexx.units = f"{TIME_OUTNC} since {dateo.strftime('%Y-%m-%d %H:%M:%S')}"
-    # timexx.units = f"{TIME_OUTNC} since {dateo.strftime('%Y-%m-%d %H:%M:%S %Z%z')}"
-    timexx.calendar = 'proleptic_gregorian'  # 'gregorian'
-    timexx._CoordinateAxisType = 'Time'
-    timexx.coordinates = nctnam
-    # define the RAINFALL variable
-    ncvnam = f'year_{yearz + simy}'
-    if RAINFMT[0] == 'f':
-        # DOING.FLOATS
-        ncvarx = sub_grp.createVariable(
-            ncvnam, datatype=f'{RAINFMT}', dimensions=(nctnam, 'y', 'x'),
-            zlib=True, complevel=9, least_significant_digit=3, fill_value=np.nan,
-            )
-    else:
-        # DOING.INTEGERS
-        ncvarx = sub_grp.createVariable(
-            ncvnam, datatype=f'{RAINFMT}', dimensions=(nctnam, 'y', 'x'),
-            zlib=True, complevel=9,
-            fill_value=np.array(0).astype(f'{RAINFMT}'),  # 0 is filling!
-            )
-    ncvarx.precision = PRECISION
-    ncvarx.long_name = 'rainfall'
-    ncvarx.units = 'mm'
-    ncvarx.grid_mapping = sub_grp['spatial_ref'].long_name
-    ncvarx.coordinates = f'{ytag} {xtag}'
-    # # define & fill some other XTRA variable (set up previously in "nc_file_i")
-    # # ... XTRA, XTRAn, etc. should be passed to this function
-    # # 'f4' guarantees 1-second (1/60 -minute) precision
-    # sub_grp.variables['duration'][:, simy] = ((XTRA * 60).round(0) / 60).astype('f4')
-    # # # https://stackoverflow.com/a/28425782/5885810  (round to the nearest-nth)
-    # # sub_grp.variables['duration'][:, simy] =\
-    # #     list(map(lambda x: round(x / (1 / 60)) * (1 / 60), XTRA))
-    # sub_grp.variables['sampled_total'][simy] = XTRA2.astype('f4')
-    return sub_grp
-
 
 # %% core computation #1
 
@@ -1887,68 +1924,62 @@ def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN):
         # okdur == NUM_S
 
         # time computation
-        MATE, i_scaling = quantum_time(DOYEAR[nreg], DATIME[nreg], DUR_S, NUM_S, simy)
-        group_idx = np.array(list(map(len, i_scaling))).cumsum()[:-1]
+        MATE, STRIDE = quantum_time(DOYEAR[nreg], DATIME[nreg], DUR_S, NUM_S, simy)
+        group_idx = np.array(list(map(len, STRIDE))).cumsum()[:-1]
+        time_idx = pd.DataFrame(MATE).groupby([0]).indices
 
         # multiply and displace storm.centres
-        M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], i_scaling, CENT.samples)
+        M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], STRIDE, CENT.samples)
         # # run the line below instead for positive.speeds & constant.speed storms
-        # M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], i_scaling, CENT.samples,
+        # M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], STRIDE, CENT.samples,
         #                       speed_lim=(0.01, np.inf), speed_stat='mean')
+        M_CENT = np.array(reduce(iconcat, M_CENT, []))
+        # https://stackoverflow.com/a/45323085/5885810  (list-of-lists flat)
 
         # sampling maxima radii
-        RADII = faster_sampling(RADIUS[nreg], limits=(MINRADIUS, np.inf), n=MATE.size)
-        RADII = np.split(RADII, group_idx)
+        RADII = faster_sampling(RADIUS[nreg], limits=(minmax_radius, np.inf), n=MATE.size)
+        # RADII = np.split(RADII, group_idx)  # no.ne.for.splitting.no.more?
         # 876 μs ± 4.81 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
-        # # run the line below instead for averaged/unique radii per storm
-        # RADII = list(map(lambda x: np.repeat(x.mean(), len(x)), RADII))
 
+        # # run the line below instead for averaged/unique radii per storm
+        # RADII = np.array(reduce(iconcat, list(map(
+        #     lambda x: np.repeat(x.mean(), len(x)), np.split(RADII, group_idx))), []))
+
+        # polygon(s) for maximum radii
+        # ringo = list(map(last_ring, RADII, M_CENT))
+        ringo = last_ring(RADII, M_CENT)
+        # 1.48 ms ± 3.92 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+        # 29 ms ± 225 μs per loop (mean ± std. dev. of 7 runs, 10 loops each) [slower approach]
 
         if TACTIC == 1:
             # sampling maxima radii
             max_lim = np.nanmin(np.array([MAXD_RAIN, iMAX], dtype='f4')) if\
                 capmax_or_not == 1 else iMAX
             MAX_I = faster_sampling(MAXINT[nreg], limits=(NO_RAIN, max_lim), n=MATE.size)
-            MAX_I = np.split(MAX_I, group_idx)
+            # MAX_I = np.split(MAX_I, group_idx)
 
             # sampling betas
-            %%timeit
             BETA = BETPAR[nreg][''].rvs(size=MATE.size)
-            %timeit
-            BETA = faster_sampling(BETPAR[nreg], limits=(-np.inf, np.inf), n=MATE.size)
-
-            BETA = np.split(BETA, group_idx)
+            # BETA = faster_sampling(BETPAR[nreg], limits=(-np.inf, np.inf), n=MATE.size)
         else:
-            # polygon(s) for maximum radii
-            RINGO = list(map(last_ring, RADII, M_CENT))
-            # 1.48 ms ± 3.92 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
-            # 29 ms ± 225 μs per loop (mean ± std. dev. of 7 runs, 10 loops each) [slower approach]
-
             # storm-center Z-tratification
             # https://stackoverflow.com/a/7015366/5885810  (list.map with 2 outputs)
             dem_ = abspath(join(parent_d, DEM_FILE))
-            qant, ztat = zip(*map(
-                lambda g: elevation.retrieve_z(g, dem_, zones=Z_CUTS), RINGO))
-            # qant, ztat = elevation.retrieve_z(RINGO[-1], dem_, zones=Z_CUTS)
+            qant, ztat = elevation.retrieve_z(ringo, dem_, zones=Z_CUTS)
+            # qant, ztat = elevation.retrieve_z(ringo.iloc[-1], dem_, zones=Z_CUTS)
 
             # compute copulas given the Z_bands (or not)
-            _one, _two = zip(*map(lambda q: zip(*q.apply(
-                lambda x: copula_sampling(COPONE[nreg], MAXINT[nreg], INTRAT[nreg],
-                                          band=x['E'], n=x[Z_STAT]), axis='columns',
-                )), qant))
-                # )), qant[-10:-8]))  # ztat[-10:-8]  # MAX_I[-10:-8]
+            _one, _two = zip(*qant.apply(lambda x: copula_sampling(
+                COPONE[nreg], MAXINT[nreg], INTRAT[nreg], band=x['E'],
+                n=x[Z_STAT]), axis='columns',))
+
             # concatenating & shuffling
-            i_max = list(map(
-                lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _one, ztat))
-            I_RAT = list(map(
-                lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _two, ztat))
+            i_max = pd.concat(_one).values[ztat['in_id'].argsort()]
+            I_RAT = pd.concat(_two).values[ztat['in_id'].argsort()]
 
             # pre-pairing for betas
-            # https://stackoverflow.com/a/45323085/5885810  (list-of-lists flat)
             d_frame = pd.DataFrame({
-                'pf_maxrainrate': reduce(iconcat, i_max, []),
-                'rratio': reduce(iconcat, I_RAT, []),
-                'radii': reduce(iconcat, RADII, []),
+                'pf_maxrainrate': i_max, 'rratio': I_RAT, 'radii': RADII,
                 })
             # capping maxima above design.rain (or even max.possible.float)
             max_lim = np.min((MAXD_RAIN, iMAX)) if capmax_or_not == 1 else iMAX
@@ -1958,69 +1989,82 @@ def main_loop(train, mask_shp, NP_MASK, simy, nreg, mom, M_LEN):
                          t_res=T_RES * TIME_DICT_['minutes'])
             # plt.hist(beto.df.loc[beto.df.flag!=1, 'beta'], bins=51, color='g')
             # plt.hist(beto.df['beta'], bins=51)
-            BETA = np.split(beto.df['beta'].values, group_idx)
+            BETA = beto.df['beta'].values
 
             # max.intensity as list.of.numpys
-            MAX_I = np.split(beto.df['pf_maxrainrate'].values, group_idx)
+            MAX_I = beto.df['pf_maxrainrate'].values
 
 
-    # # expand supporting arrays
-    #     M_RADII, M_MAXI, M_DURS, M_BETAS = XPAND(
-    #         [RADII[ okdur ], MAX_I, DUR_S[ okdur ], BETAS], i_scaling )
+            # # storm-center Z-tratification
+            # # https://stackoverflow.com/a/7015366/5885810  (list.map with 2 outputs)
+            # dem_ = abspath(join(parent_d, DEM_FILE))
+            # qant, ztat = zip(*map(
+            #     lambda g: elevation.retrieve_z(g, dem_, zones=Z_CUTS), ringo))
+            # # qant, ztat = elevation.retrieve_z(ringo[-1], dem_, zones=Z_CUTS)
+
+            # # compute copulas given the Z_bands (or not)
+            # _one, _two = zip(*map(lambda q: zip(*q.apply(
+            #     lambda x: copula_sampling(COPONE[nreg], MAXINT[nreg], INTRAT[nreg],
+            #                               band=x['E'], n=x[Z_STAT]), axis='columns',
+            #     )), qant))
+            #     # )), qant[-10:-8]))  # ztat[-10:-8]  # MAX_I[-10:-8]
+            # # concatenating & shuffling
+            # i_max = list(map(
+            #     lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _one, ztat))
+            # I_RAT = list(map(
+            #     lambda v, r: pd.concat(v).values[r['in_id'].argsort()], _two, ztat))
+
+            # # pre-pairing for betas
+            # # https://stackoverflow.com/a/45323085/5885810  (list-of-lists flat)
+            # d_frame = pd.DataFrame({
+            #     'pf_maxrainrate': reduce(iconcat, i_max, []),
+            #     'rratio': reduce(iconcat, I_RAT, []),
+            #     'radii': reduce(iconcat, RADII, []),
+            #     })
+            # # capping maxima above design.rain (or even max.possible.float)
+            # max_lim = np.min((MAXD_RAIN, iMAX)) if capmax_or_not == 1 else iMAX
+            # d_frame.loc[d_frame['pf_maxrainrate'] > max_lim, 'pf_maxrainrate'] = max_lim
+
+            # beto = betas(d_frame, method=None, seed=0.11, flag=False,
+            #              t_res=T_RES * TIME_DICT_['minutes'])
+            # # plt.hist(beto.df.loc[beto.df.flag!=1, 'beta'], bins=51, color='g')
+            # # plt.hist(beto.df['beta'], bins=51)
+            # BETA = np.split(beto.df['beta'].values, group_idx)
+
+            # # max.intensity as list.of.numpys
+            # MAX_I = np.split(beto.df['pf_maxrainrate'].values, group_idx)
 
 
-def LOTR(radius, decay, i0, lapse, centre, **kwargs):
-# radius=RADII[-1][0]; decay=BETA[-1][0]; i0=MAX_I[-1][0]; lapse=i_scaling[-1][0]; centre=M_CENT[-1][0]
-    """
-    creates a circular polygon of given radius and center.\n
-    Input ->
-    *radius* : numpy; float numpy of storm-radius (in km).
-    *decay* : numpy; float numpy of radial-decay (in 1/km).
-    *i0* : numpy; float numpy of maximum storm intesity (in mm/h).
-    *lapse* : numpy; float numpy of the actual raining time-lapse (in h).
-    *centre* : numpy; 2D-numpy with the X-Y of storm center.\n
-    **kwargs ->
-    scaling_dis : float; scaling factor between radius-units and m (1000m==1km).
-    res : int; number of segments in which a circle.quadrant is divided into.
-    dot_size: float; circle's radius emulating the storm centre's point/dot.
-    sep_ring: float; separation (in km) between rainfall rings.\n
-    Output -> geopandas.GeoDataFrame with linestings of circular.rain from centre.
-    """
-    scal = kwargs.get('scaling_dis', 1e3)
-    res = kwargs.get('res', 13)
-    sdot = kwargs.get('dot_size', 0.15)
-    sep = kwargs.get('sep_ring',  MINRADIUS * (2) + .1)  # 10.1
-    # c_radii = np.append(np.arange(radius, sdot, - sep), sdot)
-    c_radii = np.concatenate(
-        (np.arange(radius, sdot, - sep), np.array([sdot])))
-    # rainfall [in mm] for every c_radii
-    c_rain = i0 * lapse * np.exp(-2 * decay**2 * c_radii**2)  # in mm!!
+        # compute granular rainfall over intermediate rings
+        rings =  list(map(lambda r, d, i, l, c: lotr(r, d, i, l, c),
+                          RADII, BETA, MAX_I, reduce(iconcat, STRIDE, []), M_CENT))
+        # rings = list(map(lambda r, d, i, l, c: list(map(lambda r, d, i, l, c:
+        #     lotr(r, d, i, l, c), r, d, i, l, c)), RADII, BETA, MAX_I, STRIDE, M_CENT))
 
-    # buffer_strings
-    # https://www.knowledgehut.com/blog/programming/python-map-list-comprehension
-    # https://stackoverflow.com/a/30061049/5885810  (map nest)
-    # .boundary gives the LINESTRING element
-    geom = gpd.points_from_xy(x=[centre[0]], y=[centre[1]])
-    geom = geom.buffer(c_radii * scal, resolution=res).boundary
-    rain_ring = gpd.GeoDataFrame({'rain': c_rain,'geometry':geom}, crs=WKT_OGC)
-    # rain_ring.iloc[0].geometry  # rain_ring.iloc[-1].geometry
-    return rain_ring
+        # group rings by unique time.stamp (to reduce # of rasterizations)
+        c_ring, last_r = zip(*[
+            [pd.concat([rings[x] for x in idx], ignore_index=True),
+             pd.concat([ringo.iloc[x] for x in idx], ignore_index=True)] for\
+                idx in list(time_idx.values())])
+        # last_r = [pd.concat([ringo.iloc[x] for x in idx], ignore_index=True)
+        #           for idx in list(time_idx.values())]
+        # c_ring = list(map(lambda x: pd.concat(
+        #     [rings[x] for x in x], ignore_index=True), list(time_idx.values())))
+        # # # https://stackoverflow.com/a/38679861/5885810  (itemgetter)
+        # # # ... but it did NOT allow for pd.concat (when only having one)
+        # # c_ring = list(map(lambda x: pd.concat(itemgetter(*x)(rings), ignore_index=True), ...))
 
 
-
-    # compute granular rainfall over intermediate rings
-        # RINGS = LOTR( RADII[ okdur ], MAX_I, DUR_S[ okdur ], BETAS, CENTS[ okdur ] )
-        RINGS = LOTR( M_RADII, M_MAXI, M_DURS, M_BETAS, M_CENTS )
-
-        # radius=RADII[-1][0]; decay=BETA[-1][0]; i0=MAX_I[-1][0]; lapse=i_scaling[-1][0]; centre=M_CENT[-1][0]
-        RINGS = list(map(lambda r, d, i, l, c: list(map(lambda r, d, i, l, c: LOTR(r, d, i, l, c), r, d, i, l, c)), RADII, BETA, MAX_I, i_scaling, M_CENT))
 
     # COLLECTING THE STORMS
-        # STORM_MATRIX = list(map(RASTERIZE, RINGS, RINGO[ okdur ]))
-        STORM_MATRIX = list(map(RASTERIZE, RINGS ))
+        s_matrix = list(map(rasterize, rings))
+        s_matrix = list(map(lambda r: list(map(lambda r: rasterize(r, SPACE), r)), rings))
+
+        s_motrix = list(map(lambda r: rasterize(r, SPACE), reduce(iconcat, rings, [])))
+
 
     # returns a time-sorted & void.trimmed rainfall cube
-        rain, sate, zuma = RAIN_CUBO( STORM_MATRIX, np.concatenate(i_scaling), MATES, NP_MASK )
+        rain, sate, zuma = RAIN_CUBO( STORM_MATRIX, np.concatenate(STRIDE), MATES, NP_MASK )
 #%%
         # NEWMOM=solo_uno; summask=tmp_suma_dos; CUM_S=tmp_suma_dos.cumsum()[-1]
         NEWMOM, summask, CUM_S = SHUFFLING_( nreg, rain, sate, zuma, MRAIN, NP_MASK, masksum, MOTHER )
@@ -2089,6 +2133,7 @@ def STORM( NC_NAMES ):
     if Z_CUTS:
         cut_lab = [f'Z{x+1}' for x in range(len(Z_CUTS) +1)]
         cut_bin = np.union1d(Z_CUTS, [0, 9999])
+
 
     # set globals for INTEGER rainfall-NC-output
     nc_bytes()

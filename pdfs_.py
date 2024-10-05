@@ -150,19 +150,21 @@ class masking:
         **kwargs ->
         name : char; the path to raster's location (ending in ".tif").
         format : char; output format ('MEM' for inMemory; 'GTiff'...).
-        out_type : int?; gdal.object specifying the output bit-size.\n
+        out_type : int?; gdal.object specifying the output bit-size.
+        add : bool; aggregate geometry.values in case of overlapping?.\n
         Output -> numpy; 2D-numpy (or '.tif' file).
         """
         r_name = kwargs.get('name', '')
         f_rmat = kwargs.get('format', 'MEM')
         out_type = kwargs.get('outputType', gdal.GDT_Int16)
+        add_bool = kwargs.get('add', True)
 
         tmp = gdal.Rasterize(
             # 'tmp-raster_mask-buff.tif', jeometry, format='GTiff',  # (in TIFF)
             r_name, jeometry, format=f_rmat,  # (in MEMORY)
             xRes=x_res, yRes=y_res,
-            # initValues=zero, burnValues=1,  # add=0, noData=0,
-            initValues=zero, attribute=burn_tag, allTouched=True,
+            # initValues=zero, burnValues=1,  # noData=0,
+            initValues=zero, attribute=burn_tag, allTouched=True, add=add_bool,
             outputType=out_type, outputBounds=limits, targetAlignedPixels=True,
             # https://gdal.org/programs/gdal_rasterize.html#cmdoption-gdal_rasterize-tap
             # targetAlignedPixels=False,
