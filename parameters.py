@@ -70,8 +70,8 @@ OUT_PATH = './model_output'                             # output folder
 
 # RAIN_MAP = '../3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'   # no.CRS at all!
 # RAIN_MAP = './realisation_MAM_crs-wrong.nc'  # no..interpretable CRS
-RAIN_MAP = './model_input/realisation_MAM.nc'  # yes.interpretable CRS
-RAIN_MAP = './model_input/realisation_OND.nc'  # yes.interpretable CRS
+RAIN_MAP = './model_input/rainfall_MAM.nc'  # yes.interpretable CRS
+RAIN_MAP = './model_input/rainfall_OND.nc'  # yes.interpretable CRS
 NREGIONS = 4  # number of regions to split the whole.region into
 """
 NREGIONS ==1 means no splitting at all!.
@@ -203,7 +203,7 @@ RAINFMT = 'u2'                          # 'u' for UNSIGNED.INT  ||  'i' for SIGN
 PRECISION = 0.002                       # output precision
 # TIME dimension
 TIMEINT = 'u4'                          # format for integers in TIME dimension
-TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
-TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
+TIMEFIL = +(2**(int(TIMEINT[-1]) * 8)) - 1
+TIME_OUTNC = 'minutes'  # UNITS (since DATE_ORIGIN) for NC.TIME dim
 # TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
 TIME_DICT_ = dict(seconds=1, minutes=1/60, hours=1/60**2, days=1/(60**2*24))

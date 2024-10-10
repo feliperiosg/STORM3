@@ -68,8 +68,8 @@ ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
 # ZON_FILE = './model_input/regions.shp'  # nK regions file
 # SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
 # DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
-# # RAIN_MAP = './model_input/realisation_MAM.nc'
-# RAIN_MAP = './model_input/realisation_OND.nc'
+# # RAIN_MAP = './model_input/rainfall_MAM.nc'
+# RAIN_MAP = './model_input/rainfall_OND.nc'
 # NREGIONS = 4
 # SEASON_TAG = 'OND'
 
