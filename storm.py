@@ -11,31 +11,31 @@ def READ():
     import argparse
 # # maybe just..
 #     from parse_input import PARCE
-    import parse_input
+    import parse_check
     global argsup
-    parser = argparse.ArgumentParser(description = 'STOchastic Rainstorm Model [STORM v3.0]')
+    parser = argparse.ArgumentParser(description='STOchastic Rainstorm Model [STORM v3.0]')
 # updated args
-    argsup = parse_input.PARCE( parser )
-    # argsup = PARCE( parser )
+    argsup = parse_check.PARCE(parser)
     # print( argsup )
 
 
 #~ checks the validity of the SOFT-CORE PARAMETERS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def TEST():
-    from check_input import ASSERT, WELCOME, PAR_UPDATE
+    from parse_check import ASSERT, welcome, PAR_UPDATE
     global NC_NAMES
-    PAR_UPDATE( argsup )
-    ASSERT()
-    NC_NAMES = WELCOME()
+    PAR_UPDATE(argsup)
+    willkommen = welcome()
+    NC_NAMES = willkommen.ncs
+    ASSERT(willkommen.wet_hash)
 
 
 #~ all the heavy work is done in 'rainfall.py' ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 def RAIN():
-    from rainfall import STORM, PAR_UPDATE
-    PAR_UPDATE( argsup )
-    STORM( NC_NAMES )
+    from rainfall import wrapper, PAR_UPDATE
+    PAR_UPDATE(argsup)
+    wrapper(NC_NAMES)
 
 
 if __name__ == '__main__':

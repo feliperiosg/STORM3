@@ -1706,8 +1706,8 @@ def wrapper(NC_NAMES):
 if __name__ == '__main__':
 
     from parse_check import welcome
-    welcome_class = welcome()
-    NC_NAMES = welcome_class.ncs
+    willkommen = welcome()
+    NC_NAMES = willkommen.ncs
     # NC_NAMES = ['./model_output/01_test_xx.nc']
     wrapper(NC_NAMES)
 
