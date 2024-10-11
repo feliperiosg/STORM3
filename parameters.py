@@ -12,15 +12,8 @@ For an 'in-prompt' help (on these parameters) type:
     "%%python storm.py -h"  (from your Python console)
 """
 
-# SEASONS = 1#1             # Number of Seasons (per Run)
-NUMSIMS = 1#2         # Number of runs per Season
+NUMSIMS = 2#2         # Number of runs per Season (one NC.file per simulation)
 NUMSIMYRS = 1#2         # Number of years per run (per Season)
-"""
-*** perhaps, either NUMSIMS or NUMSIMYRS or both has/have to be re-thought?,
-    because i can't really have multiple SIMULATED-YEARS each one containing
-    multiple SIMULATION-NUMBERS/exercises, each one of (potential) 1000's of
-    half-hourly time-steps/stamps... it'll take a lot of space in the NC.output!
-"""
 
 """
 PTOT_SC       = Signed scalar specifying the step change in the observed wetness (TOTALP)
@@ -41,6 +34,12 @@ PTOT_SC       = 0.00
 PTOT_SF       = -.06
 STORMINESS_SC =  0.05
 STORMINESS_SF = +0.0
+
+# PARAMETER   = [ S1 ,  S2 ]
+PTOT_SC       = [ 0. , - .70]
+PTOT_SF       = [+0.0, -0. ]
+STORMINESS_SC = [ 0.50, + .0]
+STORMINESS_SF = [-0.0,  0.10]
 
 
 #%% HARD-CORE PARAMETERS
@@ -146,10 +145,6 @@ WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
 BUFFER    =  7000.                      # in meters! -> buffer distance (out of the HAD)
 X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# X_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     = 10000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# X_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =  1000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
 """
 BUFFER extends the catchment boundary (some given distance), thus delimiting the area
 for which the storm centres are generated (within).
@@ -184,7 +179,6 @@ TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links
 # # https://pynative.com/list-all-timezones-in-python/#h-get-list-of-all-timezones-name
 # # https://www.timeanddate.com/time/map/
 # # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-# DATE_ORIGIN    = '1950-01-01'                       # to store dates as INT
 DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
 """
 SEASONS_MONTHS = [[6,10], None] (equal to Z_CUTS) corresponds to the period (and season!)
@@ -197,13 +191,10 @@ all the respective (stochastic) analyses correspond for the period you want to m
 # RAINFMT = 'f4'
 RAINFMT = 'u2'                          # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
                                         # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
-# SIGNINT = 'u'                           # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
-# INTEGER = 2                             # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
-# # INTEGER = 4                             # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
 PRECISION = 0.002                       # output precision
 # TIME dimension
 TIMEINT = 'u4'                          # format for integers in TIME dimension
 TIMEFIL = +(2**(int(TIMEINT[-1]) * 8)) - 1
 TIME_OUTNC = 'minutes'  # UNITS (since DATE_ORIGIN) for NC.TIME dim
-# TIME_DICT_ = dict(seconds=60 ,minutes=1, hours=1/60, days=(60*24)**-1)
 TIME_DICT_ = dict(seconds=1, minutes=1/60, hours=1/60**2, days=1/(60**2*24))
+RAIN_NAME = 'rain'
