@@ -29,17 +29,24 @@ PTOT_SC       = [0.00]
 PTOT_SF       = [ 0.0]
 STORMINESS_SC = [-0.0]
 STORMINESS_SF = [+0.0]
-# # PARAMETER = [ S1 ]
-PTOT_SC       = 0.00
-PTOT_SF       = -.06
-STORMINESS_SC =  0.05
-STORMINESS_SF = +0.0
 
-# PARAMETER   = [ S1 ,  S2 ]
-PTOT_SC       = [ 0. , - .70]
-PTOT_SF       = [+0.0, -0. ]
-STORMINESS_SC = [ 0.50, + .0]
-STORMINESS_SF = [-0.0,  0.10]
+# # # PARAMETER = [ S1 ]
+# PTOT_SC       = 0.00
+# PTOT_SF       = -.06
+# STORMINESS_SC =  0.05
+# STORMINESS_SF = +0.0
+
+# # PARAMETER   = [ S1 ,  S2 ]
+# PTOT_SC       = [ 0. , - .70]
+# PTOT_SF       = [+0.0, -0. ]
+# STORMINESS_SC = [ 0.50, + .0]
+# STORMINESS_SF = [-0.0,  0.10]
+
+# # PARAMETER   = [ S1 ,  S2 ]
+# PTOT_SC       = [0.15, None]
+# PTOT_SF       = [ 0.0, None]
+# STORMINESS_SC = [-0.1, None]
+# STORMINESS_SF = [ 0.0, None]
 
 
 #%% HARD-CORE PARAMETERS

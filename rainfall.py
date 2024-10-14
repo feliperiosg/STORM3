@@ -182,13 +182,33 @@ RAIN_NAME = 'rain'
 
 # %% update parameters
 
-#~ replace FILE.PARAMETERS with those read from the command line ~~~~~~~~~~~~~~#
-#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-def PAR_UPDATE(args):
+# #~ replace FILE.PARAMETERS with those read from the command line ~~~~~~~~~~~~~~#
+# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# def PAR_UPDATE(args):
+#     # https://stackoverflow.com/a/2083375/5885810  (exec global... weird)
+#     for x in list(vars(args).keys()):
+#         exec(f'globals()["{x}"] = args.{x}')
+#     # print([PTOT_SC, PTOT_SF])
+
+
+# def update_par(args, **kwargs):
+#     func = kwargs.get('fun', "args.{x}")
+#     # so one can pass dicts to the function
+#     main_list = args.keys() if isinstance(args, dict) else vars(args).keys()
+#     # https://stackoverflow.com/a/2083375/5885810  (exec global... weird)
+#     for x in list(main_list):
+#         exec(f'globals()["{x}"] = {func}')
+
+
+def update_par(args, **kwargs):
+    func = kwargs.get('fun', None)
     # https://stackoverflow.com/a/2083375/5885810  (exec global... weird)
-    for x in list(vars(args).keys()):
-        exec(f'globals()["{x}"] = args.{x}')
-    # print([PTOT_SC, PTOT_SF])
+    if isinstance(args, dict):
+        for x in list(args.keys()):
+            exec(f'globals()["{x}"] = {func}')
+    else:
+        for x in list(vars(args).keys()):
+            exec(f'globals()["{x}"] = args.{x}')
 
 
 # %% constants/switches
@@ -205,6 +225,15 @@ year_z = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
 # https://stackoverflow.com/a/65319240/5885810  (replace timezone)
 date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
     tzinfo=ZoneInfo(TIME_ZONE))
+
+# replicate scalars for NUMSIMS (if only one was passed)
+scalar = {
+    'PTOT_SC': PTOT_SC, 'PTOT_SF': PTOT_SF,
+    'STORMINESS_SC': STORMINESS_SC, 'STORMINESS_SF': STORMINESS_SF,
+    }
+n_scal = np.array(list(map(len, list(scalar.values()))))
+if n_scal.all() and np.unique(n_scal) < NUMSIMS:
+    update_par(scalar, fun='np.repeat(args[x], NUMSIMS)')
 
 
 # %% nc-file creation
@@ -1445,6 +1474,10 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
             # max.intensity as list.of.numpys
             MAX_I = beto.df['pf_maxrainrate'].values
 
+        # upgrading MAX_I according to STORMINESS (but this should be no more!!)
+        MAX_I = MAX_I * (1 + STORMINESS_SC[simy] + (simy * STORMINESS_SF[simy]))
+        # using '(simy + 1)' starts the increase right from the first year
+
         # compute granular rainfall over intermediate rings
         rings =  list(map(lambda r, d, i, l, c: lotr(r, d, i, l, c),
                           RADII, BETA, MAX_I, reduce(iconcat, STRIDE, []), M_CENT))
@@ -1555,10 +1588,9 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
 
 def wrapper(NC_NAMES):
 #%%
-    global SPACE  # this SHOULD be GLOBAL, i think!!
-    # global nc, sub_grp, nsim
+    global SPACE
 
-    NC_NAMES = ['./model_output/01_test_xx.nc']
+    # NC_NAMES = ['./model_output/01_test_xx.nc']
 
     # set globals for INTEGER rainfall-NC-output
     nc_bytes()
@@ -1630,7 +1662,8 @@ def wrapper(NC_NAMES):
 
                 # scale (or not) the total seasonal rainfall
                 reg_tot = region_s['rain'].iloc[nreg] *\
-                    (1 + PTOT_SC) * (1 + ((simy + 1) * PTOT_SF))
+                    (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+                # using '(simy + 1)' starts the increase right from the first year
 
                 reg_rain, step_total, cumout = loop(
                     reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
@@ -1705,7 +1738,7 @@ def wrapper(NC_NAMES):
 
 if __name__ == '__main__':
 
-    from parse_check import welcome
+    from checks_ import welcome
     willkommen = welcome()
     NC_NAMES = willkommen.ncs
     # NC_NAMES = ['./model_output/01_test_xx.nc']
