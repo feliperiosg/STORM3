@@ -12,8 +12,8 @@ For an 'in-prompt' help (on these parameters) type:
     "%%python storm.py -h"  (from your Python console)
 """
 
-NUMSIMS = 2#2         # Number of runs per Season (one NC.file per simulation)
-NUMSIMYRS = 1#2         # Number of years per run (per Season)
+NUMSIMS = 1  # Number of runs per Season (one NC.file per simulation)
+NUMSIMYRS = 1  # Number of years per run (per Season)
 
 """
 PTOT_SC       = Signed scalar specifying the step change in the observed wetness (TOTALP)
@@ -41,12 +41,6 @@ STORMINESS_SF = [+0.0]
 # PTOT_SF       = [+0.0, -0. ]
 # STORMINESS_SC = [ 0.50, + .0]
 # STORMINESS_SF = [-0.0,  0.10]
-
-# # PARAMETER   = [ S1 ,  S2 ]
-# PTOT_SC       = [0.15, None]
-# PTOT_SF       = [ 0.0, None]
-# STORMINESS_SC = [-0.1, None]
-# STORMINESS_SF = [ 0.0, None]
 
 
 #%% HARD-CORE PARAMETERS

@@ -291,6 +291,7 @@ class welcome:
             ))
         return str_vec
 
+
 # %% assert
 
 def assertion(wet_hash):
@@ -354,7 +355,6 @@ def assertion(wet_hash):
         'file exists in the correct path.'
     if SHP_FILE is None or not exists(abspath(join(parent_d, SHP_FILE))):
         raise AssertionError(assertshp)
-
 
 
 # %% run

@@ -180,24 +180,21 @@ RAIN_NAME = 'rain'
 """
 
 
-# %% update parameters
+# %% constants/switches
 
-# #~ replace FILE.PARAMETERS with those read from the command line ~~~~~~~~~~~~~~#
-# #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-# def PAR_UPDATE(args):
-#     # https://stackoverflow.com/a/2083375/5885810  (exec global... weird)
-#     for x in list(vars(args).keys()):
-#         exec(f'globals()["{x}"] = args.{x}')
-#     # print([PTOT_SC, PTOT_SF])
+ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
+capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
+output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
 
+minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
+year_z = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
 
-# def update_par(args, **kwargs):
-#     func = kwargs.get('fun', "args.{x}")
-#     # so one can pass dicts to the function
-#     main_list = args.keys() if isinstance(args, dict) else vars(args).keys()
-#     # https://stackoverflow.com/a/2083375/5885810  (exec global... weird)
-#     for x in list(main_list):
-#         exec(f'globals()["{x}"] = {func}')
+# convert DATE_ORIGIN into 'datetime'
+# https://stackoverflow.com/a/623312/5885810
+# https://stackoverflow.com/q/70460247/5885810  (timezone no pytz)
+# https://stackoverflow.com/a/65319240/5885810  (replace timezone)
+date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
+    tzinfo=ZoneInfo(TIME_ZONE))
 
 
 def update_par(args, **kwargs):
@@ -209,22 +206,6 @@ def update_par(args, **kwargs):
     else:
         for x in list(vars(args).keys()):
             exec(f'globals()["{x}"] = args.{x}')
-
-
-# %% constants/switches
-
-ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
-capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
-
-minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
-year_z = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
-
-# convert DATE_ORIGIN into 'datetime'
-# https://stackoverflow.com/a/623312/5885810
-# https://stackoverflow.com/q/70460247/5885810  (timezone no pytz)
-# https://stackoverflow.com/a/65319240/5885810  (replace timezone)
-date_origen = datetime.strptime(DATE_ORIGIN, '%Y-%m-%d').replace(
-    tzinfo=ZoneInfo(TIME_ZONE))
 
 # replicate scalars for NUMSIMS (if only one was passed)
 scalar = {
@@ -1333,23 +1314,30 @@ def rain_cube(c_ring, last_r, t_stamp, np_mask, train, **kwargs):
             '_FillValue': 0,
             }
         )
+    # create empty array to store sums
+    suma = []
     # fill the void.array with rasterize rainfall
     for i in range(void.shape[0]):
         tmp_rain = rasterize(c_ring[i], last_r[i],)
         tmp_rain = base_round(tmp_rain, method='nearest', base=PRECISION)  # round=4
         tmp_rain[tmp_rain > max_] = max_  # capping above maxima
+        # only keep rainfall inside the mask
+        tmp_rain[np_mask == 0] = 0.
+        # compute sum here, before changing to INTeger
+        suma.append(tmp_rain.sum() / tot_pix)
+        # now do the INTransformation
         tmp_rain = ((tmp_rain - ADD) / SCL).round()
         void[i, :, :] = tmp_rain  # .astype(RAINFMT)
-    # only keeping rainfall inside the mask & larger than zero (i.e., 1 INT)
-    void = void.where((np_mask == 1) & (void > 1), 0)
+    # only keep rainfall larger than zero (i.e., 1 INT)
+    void = void.where(void > 1, 0)
     # temporal aggregation
     """
     dividing by TOT_PIXimplies REACHING the MEAN (in the stopping criterium).
     if one wants the 'granular' MEDIAN, something else has to be thought about!
     """
-    suma = (void.sum(dim=('x', 'y')) * SCL + ADD) / tot_pix
-
-    return void, suma
+    suma_ = xr.DataArray(data=np.array(suma), coords={'time': void['time']},)
+    # suma = (void.sum(dim=('x', 'y')) * SCL + ADD) / tot_pix
+    return void, suma_
 
 
 # %% main loop
@@ -1376,19 +1364,16 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
     # for the HAD we assume (initially) there's ~6 storm/day; then
     # ... we continue 'half-ing' the above seed
     # 30*?? ('_SF' runs); 30*?? ('_SC' runs); 30*6?? ('STANDARD' runs)
-    NUM_S = 30 * 6 * mlen
-    NUM_S = int(30 * 0.7 * mlen)
+    NUM_S = 30 * 9 * mlen
     CUM_S = 0
-    # KOUNT = 0  # TEMPORAL.STOPPING.CRITERION
     contar_int = 0
 
     lrain = [None]
     lsuma = [None]
 
     # until total rainfall is reached or no more storms to compute!
-
-    # while CUM_S < train and NUM_S >= 2:
-    while contar_int < 1 and NUM_S >= 2:  # does the cycle 1x maximum!
+    while CUM_S < train and NUM_S >= 2:
+    # while contar_int < 1 and NUM_S >= 2:  # does the cycle 1x maximum!
 #%%
         # sample random storm centres
         CENT = scentres(mask_shp, NUM_S)  # CENT.plot()
@@ -1474,9 +1459,9 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
             # max.intensity as list.of.numpys
             MAX_I = beto.df['pf_maxrainrate'].values
 
-        # upgrading MAX_I according to STORMINESS (but this should be no more!!)
-        MAX_I = MAX_I * (1 + STORMINESS_SC[simy] + (simy * STORMINESS_SF[simy]))
-        # using '(simy + 1)' starts the increase right from the first year
+        # # upgrading MAX_I according to STORMINESS (but this should be no more!!)
+        # MAX_I = MAX_I * (1 + STORMINESS_SC[simy] + (simy * STORMINESS_SF[simy]))
+        # # using '(simy + 1)' starts the increase right from the first year
 
         # compute granular rainfall over intermediate rings
         rings =  list(map(lambda r, d, i, l, c: lotr(r, d, i, l, c),
@@ -1537,23 +1522,17 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
             #     lrain[1].loc[np.isin(lrain[1]['time'], idxs)] - 1],
             #     dim='time',).groupby('time').sum().astype('u4')
 
+            # # THIS IS also CORRECT!
+            # tmp_rain.loc[intersect][tmp_rain.loc[intersect] >= 4] =\
+            #     tmp_rain.loc[intersect][tmp_rain.loc[intersect] >= 4] - 1
+
             # '- 1' because summing.integers requires so (given ADD and SCL)
             # e.g., ((.004 - -.002) / .002) == 3; (3 * .002) - .002 == 0.004
-
-            # tmp_rain.loc[intersect] = tmp_rain.loc[intersect] - 1
-
-            # # THIS IS CORRECT!
-            # tmp_rain.loc[intersect][tmp_rain.loc[intersect] >= 4] = tmp_rain.loc[intersect][tmp_rain.loc[intersect] >= 4] - 1
-
-            # OR TRY THIS:
+            # the minima in both (left & right) is 2 (apart from zero)...
+            # so everything above 4 should be subtracted 1, so the float is OK
             tmp_rain.loc[intersect] = tmp_rain.loc[intersect].where(
                 tmp_rain.loc[intersect] < 4, tmp_rain.loc[intersect] - 1)
-
-    # THIS -1 HERE IS BOGUS BECAUSE WHEN ONE FIELD HAS 0 THE OTHER HAS TO BE PRESERVED (equivalent to sum to a NAN)
-    # SO BOTH ARRAYS (LEFT & RIGHT) HAVE TO CORRESPONDENLY ALTERED BEFORE THE SUM.
-    # DO THIS BEFORE:
-    #     tmp_rain = xr.concat(
-
+            # capping maxima again
             tmp_rain = tmp_rain.where(tmp_rain <= maxima, maxima).astype(RAINFMT)
         else:
             tmp_rain = lrain[-1]
@@ -1566,13 +1545,14 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
         del lsuma[-1]
 
         # update iterables
-        CUM_S = tmp_cum[-1].data
-        NUM_S = int(NUM_S * .8)  # decrease the counter
+        kum_s = lsuma[0].cumsum()
+        # CUM_S = tmp_cum.loc[idxs[-1]].data  # perhaps this is faster but dubious
+        CUM_S = kum_s[-1].data
+        NUM_S = int(NUM_S * .9)  # decrease the counter
         contar_int += 1
-#%%
+
         # # output checking
         # print(f'\n CUMsum - PTOT: {CUM_S - train}\n----')
-
     # WARN IF THERE IS NO CONVERGING
     assert not (CUM_S < train and NUM_S < 2), f'Iteration not converging for '\
         f'REGION [{nreg}] -> YEAR [{simy}] !!\nTry a larger '\
@@ -1581,7 +1561,7 @@ def loop(train, mask_shp, np_mask, nreg, simy, mlen, upd_max, maxima, date_pool)
 
     # lrain[0] = lrain[0].where(np_mask == 1, 0)
     # MAYBE THE 1.MASK SHOULD HAPPEN HERE
-    return lrain[0], lsuma[0], CUM_S
+    return lrain[0], kum_s
 
 
 # %% wrapper
@@ -1665,11 +1645,10 @@ def wrapper(NC_NAMES):
                     (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
                 # using '(simy + 1)' starts the increase right from the first year
 
-                reg_rain, step_total, cumout = loop(
+                reg_rain, cum_out = loop(
                     reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
                     nreg, simy, mlen, upd_max, maxima, date_pool,
                     )
-                # reg_rain = lrain[0]; step_total=lsuma[0]; cumout=CUM_S
 
                 # where the rain must be placed
                 what = np.intersect1d(time_seas, reg_rain['time'],
@@ -1679,7 +1658,7 @@ def wrapper(NC_NAMES):
 
                 collect()
 
-                C_OUT.append(cumout)
+                C_OUT.append(cum_out[-1].data)
 
             # MAYBE THE 1.MASK SHOULD HAPPEN HERE
 
@@ -1694,19 +1673,24 @@ def wrapper(NC_NAMES):
                 sub_grp[RAIN_NAME].scale_factor = SCL
                 sub_grp[RAIN_NAME].add_offset = ADD
 #%%
-            # # storing MEANs as INTs
-            # sumas = ((sub_grp[RAIN_NAME][:] * SCL) + ADD).round(3).astype('f4').sum(axis=0)
-            # cum_nc = []
-            # for rr in region_s['npma']:
-            #     cum_nc.append(np.ma.array(sumas, mask=~rr.astype("bool")).mean())
-            # # temporal xport of kmeans+regions
-            # pd.DataFrame({
-            #     'y':np.repeat(iyear, NREGIONS), 'k':range(NREGIONS),
-            #     'mean_in':region_s['rain'], 'mean_out':C_OUT, 'mean_xtra':cum_nc,
-            #     }).to_csv(sim_file.replace('.nc', '_stats.csv'), sep=',', index=False, mode='a')
+            # store.mean.stats as CSV.file
+            if output_stats_ == 1:
+                zumaz = (sub_grp[RAIN_NAME][:] * SCL + ADD
+                         ).round(3).astype('f4').sum(axis=0)
+                cum_nc = []
+                for rr in region_s['npma']:
+                    # cum_nc.append(np.ma.array(zumaz, mask=~rr.astype("bool")).mean())
+                    cum_nc.append(zumaz[rr.astype(bool)].sum() / rr.sum())
+                pd.DataFrame({
+                    'y': np.repeat(iyear, NREGIONS),
+                    'k': range(NREGIONS),
+                    'mean_in': region_s['rain'],
+                    'mean_out': C_OUT,
+                    'mean_nc': cum_nc,
+                    }).to_csv(sim_file.replace('.nc', '_stats.csv'), sep=',',
+                              mode='a', index=False)
 
         nc.close()
-
 
 
 # def whopper(NC_NAMOS):
@@ -1733,7 +1717,6 @@ def wrapper(NC_NAMES):
 #         nc.close()
 
 
-
 # %% run
 
 if __name__ == '__main__':
@@ -1741,7 +1724,6 @@ if __name__ == '__main__':
     from checks_ import welcome
     willkommen = welcome()
     NC_NAMES = willkommen.ncs
-    # NC_NAMES = ['./model_output/01_test_xx.nc']
     wrapper(NC_NAMES)
-
+    # NC_NAMES = ['./model_output/01_test_xx.nc']
     # whopper(['./model_output/xxx.nc'])
