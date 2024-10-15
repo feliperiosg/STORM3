@@ -13,7 +13,7 @@ For an 'in-prompt' help (on these parameters) type:
 """
 
 NUMSIMS = 1  # Number of runs per Season (one NC.file per simulation)
-NUMSIMYRS = 1  # Number of years per run (per Season)
+NUMSIMYRS = 2  # Number of years per run (per Season)
 
 """
 PTOT_SC       = Signed scalar specifying the step change in the observed wetness (TOTALP)
