@@ -1661,6 +1661,11 @@ def wrapper(NC_NAMES):
 
                 reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
                 sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
+                # # having assigned the 'rain' name
+                # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
+                #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
+                #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
+                #     )
 
                 collect()
 
