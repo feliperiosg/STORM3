@@ -304,12 +304,12 @@ def assertion(wet_hash):
     for j in wet_hash.Var2:
         SC = f'{j}_SC'
         SF = f'{j}_SF'
-        # print(NUMSIMS)
         # does each dimension/season have the same length among them??
         if ~np.isin(np.unique([len(eval(x)) for x in [SC, SF]]), 1).all():
-            warn(f'\nIncompatible Sizes in {SC} and {SF}!\nSTORM will '
-                 'only use the values of the first Simulation, so they '
-                 f'can be passed to all {NUMSIMS} Simulations.')
+            warn(f'\nSizes of {SC} and {SF} do not match dimensions of NUMSIM '
+                 'or NUMSIMYRS!\nSTORM will only use the values of the first '
+                 f'Simulation, so they can be passed to all {NUMSIMS} '
+                 f'Simulations and/or {NUMSIMYRS} Years-per-Simulation.')
         # is each dimension/simulation as long as 1 or NUMSIMYRS??
         for i in range(NUMSIMS):
             # does the progression factor (SF) reduces below 0 rain?

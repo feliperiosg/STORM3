@@ -7,33 +7,6 @@ To run this script type:
 
 # %% functions
 
-# def read_and_test():
-#     """
-#     parse and assertion of some input parameters.\n
-#     Parameters
-#     ----------
-#     None.\n
-#     Returns
-#     -------
-#     tuple :
-#         argparse.Namespace; and a list of simulation output-paths.
-#     """
-#     import checks_
-#     from argparse import ArgumentParser
-#     parser = ArgumentParser(
-#         description='STOchastic Rainstorm Model [STORM v3.0]'
-#         )
-#     # call class
-#     argsup = checks_.parse(parser)
-#     # run the parsing
-#     argsup = argsup.parsing()
-#     # print(argsup)
-#     willkommen = checks_.welcome()
-#     # NC_NAMES = willkommen.ncs
-#     checks_.assertion(willkommen.wet_hash)
-#     return argsup, willkommen.ncs
-
-
 def read():
     """
     parse and assertion of some input parameters.\n
@@ -86,17 +59,16 @@ def compute_storm(one, two):
     """
     # import here these heavy modules so there's little toll when calling for
     # ... --help or --version in 'ArgumentParser'.
-    from rainfall import update_par, wrapper
+    from rainfall import update_par, replicate_, wrapper
     update_par(one)
-    # print(one)
-    wrapper(nc_names)
+    replicate_()
+    wrapper(two)
 
 
 # %% run
 
 if __name__ == '__main__':
 
-    # up_args, nc_name = read_and_test()
     up_args = read()
     nc_name = test(up_args)
-    # compute_storm(up_args, nc_name)
+    compute_storm(up_args, nc_name)

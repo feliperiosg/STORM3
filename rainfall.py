@@ -1,19 +1,19 @@
 import warnings
 
-# https://stackoverflow.com/a/9134842/5885810     (supress warning by message)
-warnings.filterwarnings('ignore', message='You will likely lose important projection '\
-                        'information when converting to a PROJ string from another format')
-# WOS doesn't deal with "ecCodes"
-warnings.filterwarnings('ignore', message='Failed to load cfgrib - most likely '\
-                        'there is a problem accessing the ecCodes library.')
-# because the "EPSG_CODE = 42106" is not a standard proj?
-warnings.filterwarnings('ignore', message="GeoDataFrame's CRS is not "\
-                        "representable in URN OGC format")
-# https://github.com/slundberg/shap/issues/2909    (suppresing the one from libpysal 4.7.0)
-warnings.filterwarnings('ignore', message=".*`Geometry` class will deprecated '\
-                        'and removed in a future version of libpysal*")
-# # https://github.com/slundberg/shap/issues/2909    (suppresing the one from numba 0.59.0)
-# warnings.filterwarnings('ignore', message=".*The 'nopython' keyword.*")
+# # https://stackoverflow.com/a/9134842/5885810     (supress warning by message)
+# warnings.filterwarnings('ignore', message='You will likely lose important projection '\
+#                         'information when converting to a PROJ string from another format')
+# # WOS doesn't deal with "ecCodes"
+# warnings.filterwarnings('ignore', message='Failed to load cfgrib - most likely '\
+#                         'there is a problem accessing the ecCodes library.')
+# # because the "EPSG_CODE = 42106" is not a standard proj?
+# warnings.filterwarnings('ignore', message="GeoDataFrame's CRS is not "\
+#                         "representable in URN OGC format")
+# # https://github.com/slundberg/shap/issues/2909    (suppresing the one from libpysal 4.7.0)
+# warnings.filterwarnings('ignore', message=".*`Geometry` class will deprecated '\
+#                         'and removed in a future version of libpysal*")
+# # # https://github.com/slundberg/shap/issues/2909    (suppresing the one from numba 0.59.0)
+# # warnings.filterwarnings('ignore', message=".*The 'nopython' keyword.*")
 
 # https://stackoverflow.com/a/248066/5885810
 from os.path import abspath, basename, dirname, join
@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 # # https://stackoverflow.com/a/65562060/5885810  (ecCodes in WOS)
 import xarray as xr
+import rioxarray as rio
 # from pyproj import CRS
 import pyproj as pp
 import netCDF4 as nc4
@@ -40,7 +41,7 @@ from osgeo import gdal
 if gdal.__version__.__getitem__(0) == '3':# enable exceptions for GDAL<=4.0
     gdal.UseExceptions()
     # gdal.DontUseExceptions()
-    # gdal.__version__ # wos_ '3.6.2' # linux_ '3.7.0'
+    # gdal.__version__ # wos_ '3.9.2' # linux_ '3.7.0'
 
 from rasterio import fill
 # from rasterio import crs as rcrs
@@ -49,7 +50,6 @@ from datetime import timedelta, timezone, datetime
 from dateutil.tz import tzlocal
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
-import rioxarray as rio
 
 import libpysal as ps
 from pointpats import PoissonPointProcess, random, Window  # , PointPattern
@@ -57,7 +57,7 @@ from pointpats import PoissonPointProcess, random, Window  # , PointPattern
 import matplotlib.pyplot as plt
 from functools import reduce
 from operator import iconcat, itemgetter
-from chunking import CHUNK_3D
+# from chunking import CHUNK_3D
 from parameters import *
 from pdfs_ import betas, circular, elevation, field, masking
 
@@ -97,94 +97,12 @@ and didn't cause problems when running "fitter" either.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 
-#%% INPUT PARAMETERS
-
-"""
-NUMSIMS = 2#1#2         # Number of runs per Season
-NUMSIMYRS = 1#2         # Number of years per run (per Season)
-
-# # PARAMETER = [ S1 ]
-PTOT_SC       = [0.00]
-PTOT_SF       = [ 0.0]
-STORMINESS_SC = [-0.0]
-STORMINESS_SF = [+0.0]
-
-# PDF_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG.csv'      # output from 'pre_processing.py'
-# PDF_FILE = './model_input/ProbabilityDensityFunctions_ONE--ANALOG-pmf.csv'  # output from 'pre_processing.py'
-SHP_FILE = './model_input/HAD_basin.shp'                # catchment shape-file in WGS84
-# DEM_FILE = './model_input/dem/WGdem_wgs84.tif'        # aoi raster-file (optional**)
-# DEM_FILE = './model_input/dem/WGdem_26912.tif'        # aoi raster-file in local CRS (***)
-DEM_FILE = None
-OUT_PATH = './model_output'                             # output folder
-
-RAIN_MAP = './model_input/rainfall_MAM.nc'  # yes.interpretable CRS
-RAIN_MAP = './model_input/rainfall_OND.nc'  # yes.interpretable CRS
-NREGIONS = 4  # number of regions to split the whole.region into
-
-Z_STAT = 'mean'#'median'    # statistic to retrieve from the DEM ['median'|'mean' or 'min'|'max'?? not 'count']
-# Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
-# Z_CUTS = [1000, 2000, 3000]  # [67.53, 97.15, 99.87]%
-Z_CUTS = [300,  600, 1200]  # in meters! [28.13, 48.75, 78.57]%
-# Z_CUTS = None  # (or Z_CUTS = []) for INT-DUR copula modelling regardless altitude
-
-TACTIC = 1  # the "way" STORM must be run
-
-# OGC-WKT for HAD [taken from https://epsg.io/42106]
-WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
-    'GEOGCS["unknown",'\
-        'DATUM["unknown",'\
-            'SPHEROID["Normal Sphere (r=6370997)",6370997,0]],'\
-        'PRIMEM["Greenwich",0,'\
-            'AUTHORITY["EPSG","8901"]],'\
-        'UNIT["degree",0.0174532925199433,'\
-            'AUTHORITY["EPSG","9122"]]],'\
-    'PROJECTION["Lambert_Azimuthal_Equal_Area"],'\
-    'PARAMETER["latitude_of_center",5],'\
-    'PARAMETER["longitude_of_center",20],'\
-    'PARAMETER["false_easting",0],'\
-    'PARAMETER["false_northing",0],'\
-    'UNIT["metre",1,'\
-        'AUTHORITY["EPSG","9001"]],'\
-    'AXIS["Easting",EAST],'\
-    'AXIS["Northing",NORTH],'\
-    'AUTHORITY["EPSG","42106"]]'
-
-### GRID characterization
-BUFFER    =  7000.                      # in meters! -> buffer distance (out of the HAD)
-X_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-Y_RES     =  5000.                      # in meters! (pxl.resolution for the 'regular/local' CRS)
-
-T_RES   =  30                           # in minutes! -> TEMPORAL.RES of TIME.SLICES
-NO_RAIN =  0.01                         # in mm -> minimum preceptible/measurable/meaningful RAIN in all AOI
-MIN_DUR =  20                            # in minutes!
-MAX_DUR =  60 * 24 * 4                  # in minutes! -> 4 days (in this case)
-
-MAXD_RAIN = 60 * 2                      # in mm
-DISPERSE_ = .2                          # factor to split MAXD_RAIN into
-SEASON_TAG = 'OND'
-SEED_YEAR = 2024                        # for your SIM/VAL to start in 2050
-TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
-DATE_ORIGIN    = '1970-01-01'                       # to store dates as INT
-
-### only touch this parameter if you really know what you're doing!!)
-# RAINFMT = 'f4'
-RAINFMT = 'u2'                          # 'u' for UNSIGNED.INT  ||  'i' for SIGNED.INT  ||  'f' for FLOAT
-                                        # number of Bytes (1, 2, 4 or 8) to store the RAINFALL variable (into)
-PRECISION = 0.002                       # output precision
-# TIME dimension
-TIMEINT = 'u4'                          # format for integers in TIME dimension
-TIMEFIL = +(2**( int(TIMEINT[-1]) *8 )) -1
-TIME_OUTNC = 'minutes'                  # UNITS (since DATE_ORIGIN) for NC.TIME dim
-TIME_DICT_ = dict(seconds=1, minutes=1/60, hours=1/60**2, days=1/(60**2*24))
-RAIN_NAME = 'rain'
-"""
-
-
 # %% constants/switches
 
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
-output_stats_ = 1  # 1 if willing to produce CSV.file; 0 saves some ram.mem
+output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
+tunnin = 7
 
 minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
 year_z = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
@@ -207,17 +125,24 @@ def update_par(args, **kwargs):
         for x in list(vars(args).keys()):
             exec(f'globals()["{x}"] = args.{x}')
 
-# replicate scalars for NUMSIMS (if only one was passed)
-scalar = {
-    'PTOT_SC': PTOT_SC, 'PTOT_SF': PTOT_SF,
-    'STORMINESS_SC': STORMINESS_SC, 'STORMINESS_SF': STORMINESS_SF,
-    }
-n_scal = np.array(list(map(len, list(scalar.values()))))
-maxnum  = max(NUMSIMS, NUMSIMYRS)
-if n_scal.all() and np.unique(n_scal) < maxnum:
-    update_par(scalar, fun='np.repeat(args[x], maxnum)')
-# pick the counter to call 'the scalars'
-n_sim_y = ['nsim', 'simy'][np.argmax((NUMSIMS, NUMSIMYRS))]
+
+def replicate_():
+    # replicate scalars for NUMSIMS (if only one was passed)
+    scalar = {
+        'PTOT_SC': PTOT_SC, 'PTOT_SF': PTOT_SF,
+        'STORMINESS_SC': STORMINESS_SC, 'STORMINESS_SF': STORMINESS_SF,
+        }
+    n_scal = np.array(list(map(len, list(scalar.values()))))
+    maxnum  = max(NUMSIMS, NUMSIMYRS)
+    if n_scal.all() and np.unique(n_scal) < maxnum:
+        update_par(scalar, fun=f'np.repeat(args[x], {maxnum})')
+    # pick the counter to call 'the scalars'
+    n_sim_y = ['nsim', 'simy'][np.argmax((NUMSIMS, NUMSIMYRS))]
+    # print(PTOT_SC, PTOT_SF)
+    return n_sim_y
+
+
+n_sim_y = replicate_()
 
 
 # %% nc-file creation
@@ -380,7 +305,7 @@ parameters to generate some consistency when reading future? random rain-fields.
     # storing local coordinates (Y-axis)
     yy = nc.createVariable(
         'projection_y_coordinate', 'i4', dimensions=('y'),
-        chunksizes=CHUNK_3D([len(xpace.ys)], valSize=4),
+        # chunksizes=CHUNK_3D([len(xpace.ys)], valSize=4),
         )
     yy[:] = xpace.ys
     yy.coordinates = 'projection_y_coordinate'
@@ -391,7 +316,7 @@ parameters to generate some consistency when reading future? random rain-fields.
     # storing local coordinates (X-axis)
     xx = nc.createVariable(
         'projection_x_coordinate', 'i4', dimensions=('x'),
-        chunksizes=CHUNK_3D([len(xpace.xs)], valSize=4),
+        # chunksizes=CHUNK_3D([len(xpace.xs)], valSize=4),
         )
     xx[:] = xpace.xs
     xx.coordinates = 'projection_x_coordinate'
@@ -459,7 +384,7 @@ parameters to generate some consistency when reading future? random rain-fields.
     # store the MASK
     ncmask = nc.createVariable(
         'mask', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
-        chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
+        # chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
         )
     ncmask[:] = xpace.catchment_mask
     ncmask.grid_mapping = sref_name
@@ -471,7 +396,7 @@ parameters to generate some consistency when reading future? random rain-fields.
     # store the kmeans/regions
     kmeans = nc.createVariable(
         'regions', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
-        chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
+        # chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
         fill_value=-1,
         )
     # kmeans[:] = -1
@@ -512,7 +437,7 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
     # storing dates (time-axis)
     timexx = sub_grp.createVariable(
         nctnam, TIMEINT, dimensions=('time'), fill_value=TIMEFIL,
-        chunksizes=CHUNK_3D([len(times)], valSize=4),
+        # chunksizes=CHUNK_3D([len(times)], valSize=4),
         )
     timexx[:] = times
     timexx.long_name = 'starting time'
@@ -529,7 +454,7 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
         # DOING.FLOATS
         ncvarx = sub_grp.createVariable(
             ncvnam, datatype=f'{RAINFMT}', dimensions=('time', 'y', 'x'),
-            chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
+            # chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
             zlib=True, complevel=9, least_significant_digit=3, fill_value=np.nan,
             )
     else:
@@ -537,7 +462,7 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
         ncvarx = sub_grp.createVariable(
             ncvnam, datatype=f'{RAINFMT}', dimensions=('time', 'y', 'x'),
             zlib=True, complevel=9,
-            chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
+            # chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
             fill_value=np.array(0).astype(f'{RAINFMT}'),  # 0 is filling!
             )
         """
@@ -1050,7 +975,7 @@ def slice_time(time_raw, time_rnd, s_dur, **kwargs):
     return sfactors
 
 
-def quantum_time(doy_par, tod_par, DUR_S, date_pool, n):
+def quantum_time(doy_par, tod_par, DUR_S, date_pool, n, **kwargs):
 # doy_par=DOYEAR[nreg]; tod_par=DATIME[nreg]; n=NUM_S
     """
     samples datetimes and quatize them into packs of storm duration(s).\n
@@ -1060,8 +985,23 @@ def quantum_time(doy_par, tod_par, DUR_S, date_pool, n):
     *DUR_S* : np.array; float numpy of storm durations (in hours).
     *date_pool* : list of start & end 'datetime.datetime(s)' of the season.
     *n* : int; sample size.\n
-    Output -> tuple; list-quatized hourly resolutions & their xploded equivalent (date)times.
+    **kwargs ->
+    t_res : int; temporal resolution.
+    time_tag : char; string indicating the base resolution.
+    time_dic : dic; dictionary containing the equivalences of 'tags' in base 60.
+    base_system: int; conversion constant for the time_dic-system (default: 60).
+    tz : char; standarized name of the (local) time zone.
+    t_format : char; string indicating the output format ('u4', 'f8'... etc).\n
+    Output -> tuple; list-quantized hourly resolutions & \
+        their xploded equivalent (date)times.
     """
+    base = kwargs.get('t_res', T_RES)
+    time_dic = kwargs.get('time_dic', TIME_DICT_)
+    time_tag = kwargs.get('time_tag', TIME_OUTNC)
+    s_base = kwargs.get('base_system', 60)  # sexagesimal
+    time_zon = kwargs.get('tz', TIME_ZONE)
+    time_int = kwargs.get('t_format', TIMEINT)
+
     # computing DOY
     M = n
     all_dates = []
@@ -1080,31 +1020,43 @@ def quantum_time(doy_par, tod_par, DUR_S, date_pool, n):
         M = len(dates) - len(sates)
         all_dates.append(sates)
     all_dates = pd.concat(all_dates, ignore_index=True)
+    # shuffle the dates (so later the selection can be done left-to-right)
+    # # https://stackoverflow.com/a/72040563/5885810  (shuffle pandas)
+    # pd.Series(np.random.permutation(all_dates))
+    np.random.RandomState(seed=None).shuffle(all_dates)
+    # np.random.RandomState(
+    #     seed=np.random.randint(0, 4294967295, 1, dtype=np.int64)
+    #     ).shuffle(all_dates)
+    # # https://github.com/DLR-RM/stable-baselines3/issues/1579#issuecomment-1611892556
+
     # computing TOD
     cs_tod = circular(tod_par,)
     times = cs_tod.samples(n, data_type='tod')
     # cs_tod.plot_samples(data=times, data_type='tod', bins=40)  # plotting
     # https://stackoverflow.com/a/50062101/5885810
+
     # SECONDS since DATE_ORIGIN
     stamps = np.asarray(
         list(map(
             lambda d, t: (d + timedelta(hours=t) - date_origen).total_seconds(),
-            all_dates.dt.tz_localize(TIME_ZONE), times
+            all_dates.dt.tz_localize(time_zon), times
             ))
         )
     # # https://stackoverflow.com/a/67105429/5885810  (chopping milliseconds)
     # stamps = np.asarray(list(map(lambda d, t: (
     #     d +timedelta(hours=t)).isoformat(timespec='seconds'), dates, times)))
-    stamps = stamps * TIME_DICT_[TIME_OUTNC]  # scaled to output.TIMENC.res
+    stamps = stamps * time_dic[time_tag]  # scaled to output.TIMENC.res
+
     # round starting.dates to nearest.floor T_RES
     rates = base_round(stamps)
     # turn the DUR_S into discrete time.slices
     s_cal = slice_time(stamps, rates, DUR_S)
     # xploding of discrete timestamps (per storm.cluster)
-    tres_up = T_RES * TIME_DICT_[TIME_OUTNC] * 60
+    tres_up = base * time_dic[time_tag] * s_base
     mates = np.concatenate(list(map(lambda r_s, i_s: np.arange(
         start=r_s, stop=r_s + tres_up * len(i_s), step=tres_up),
-        rates, s_cal))).astype(TIMEINT)
+        rates, s_cal))).astype(time_int)
+
     return mates, s_cal
 
 
@@ -1378,7 +1330,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
     # for the HAD we assume (initially) there's ~6 storm/day; then
     # ... we continue 'half-ing' the above seed
     # 30*?? ('_SF' runs); 30*?? ('_SC' runs); 30*6?? ('STANDARD' runs)
-    NUM_S = 30 * 7 * mlen
+    NUM_S = 30 * tunnin * mlen
     CUM_S = 0
     contar_int = 0
 
@@ -1407,7 +1359,8 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         # computing time
         MATE, STRIDE = quantum_time(DOYEAR[nreg], DATIME[nreg], DUR_S, date_pool, NUM_S)
         group_idx = np.array(list(map(len, STRIDE))).cumsum()[:-1]
-        time_idx = pd.DataFrame(MATE).groupby([0]).indices
+        time_idx = pd.DataFrame(MATE).groupby([0], sort=False).indices  # unsorted
+        # time_idx = pd.DataFrame(MATE).groupby([0], sort=True).indices  # sorted
 
         # multiply and displace storm.centres
         M_CENT = moving_storm(DIRMOV[nreg], VELMOV[nreg], STRIDE, CENT.samples)
@@ -1419,7 +1372,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
 
         # sampling maxima radii
         RADII = faster_sampling(RADIUS[nreg], limits=(minmax_radius, np.inf), n=MATE.size)
-        # RADII = np.split(RADII, group_idx)  # no.ne.for.splitting.no.more?
+        # RADII = np.split(RADII, group_idx)  # no.need.for.splitting.no.more?
         # 876 μs ± 4.81 μs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
 
         # # run the line below instead for averaged/unique radii per storm
@@ -1477,8 +1430,8 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         # MAX_I = MAX_I * (1 + STORMINESS_SC[eval(n_sim_y)] + (simy * STORMINESS_SF[eval(n_sim_y)]))
 
         # compute granular rainfall over intermediate rings
-        rings =  list(map(lambda r, d, i, l, c: lotr(r, d, i, l, c),
-                          RADII, BETA, MAX_I, reduce(iconcat, STRIDE, []), M_CENT))
+        rings = list(map(lambda r, d, i, l, c: lotr(r, d, i, l, c),
+                         RADII, BETA, MAX_I, reduce(iconcat, STRIDE, []), M_CENT))
 
         # group rings by unique time.stamp (to reduce # of rasterizations)
         c_ring, last_r = zip(*[
@@ -1501,40 +1454,72 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         lrain.append(rain)
         lsuma.append(suma)
 
-        # find if CUM_S is reached
-        new_sum = xr.concat(lsuma, dim='time').groupby('time').sum() if\
-            contar_int != 0 else lsuma[-1]
-        # plt.plot(range(len(new_sum)), new_sum.time.data)
-        tmp_cum = new_sum.cumsum()  # tmp_cum.plot(color='g')
+        #     guess = [1, len(suma)]
+        #     gdiff = abs(np.diff(guess))[0]
+        #     ii = 1
+        #     while gdiff > 1:
+        #         print(ii)
+        #         # use_sum = suma[:guess[-1]]
+        #         tmp_cum = xr.concat((lsuma[0], suma[:guess[-1]]), dim='time').groupby('time').sum().cumsum()
+        #         pos_ = -1 if tmp_cum[-1] > train else +1
+        #         guess[-1] = guess[-1] + pos_ * int(gdiff / 2)
+        #         # guess = guess[::-1]  # reverse vector
+        #         guess.reverse()
+        #         gdiff = abs(np.diff(guess))[0]
+        #         ii += 1
+        #     fpos = min(guess)
+
+        tmp_cum = suma.cumsum() + CUM_S  # tmp_cum.plot(color='g')
+        # plt.plot(range(len(tmp_cum)), tmp_cum.time.data)
+
+        # new_sum = xr.concat(lsuma, dim='time').groupby('time').sum() if\
+        #     contar_int != 0 else lsuma[-1]
+        # # plt.plot(range(len(new_sum)), new_sum.time.data)
+        # tmp_cum = new_sum.cumsum()  # tmp_cum.plot(color='g')
+
         # preserve time.slices falling below "train"
         bynd = tmp_cum[tmp_cum >= train]['time'].data
-        idxs = np.concat([tmp_cum[tmp_cum < train]['time'].data,
-                          bynd if len(bynd) == 0 else bynd[0].reshape(1)],)
+        # update 'bynd' (in case 'train' hasn't been reached yet)
+        bynd = bynd if len(bynd) == 0 else bynd[0].reshape(1)
+        undr = np.concat([tmp_cum[tmp_cum < train]['time'].data, bynd],)
+        # update time.step sums
+        new_sum = xr.concat(
+            (lsuma[0], lsuma[-1].loc[undr]), dim='time'
+            ).groupby('time').sum() if contar_int != 0 else lsuma[-1].loc[undr]
+
+        # idxs = np.concat([tmp_cum[tmp_cum < train]['time'].data, bynd],)
 
         # intersections
-        t_two = lsuma[-1]['time'].loc[np.isin(lsuma[-1]['time'], idxs)]
-        t_one = lsuma[0]['time'].loc[np.isin(lsuma[0]['time'], idxs)] if\
-            contar_int != 0 else t_two
-        intersect = np.intersect1d(t_one, t_two, assume_unique=True,)
+        # t_two = lsuma[-1]['time'].loc[np.isin(lsuma[-1]['time'], idxs)]
+        t_two = lsuma[-1]['time'].loc[undr]
+        # t_one = lsuma[0]['time'].loc[np.isin(lsuma[0]['time'], idxs)] if\
+        #     contar_int != 0 else t_two
+        t_one = lsuma[0]['time'] if contar_int != 0 else t_two
+        intersect, one_ix, two_ix = np.intersect1d(
+            t_one, t_two, assume_unique=True, return_indices=True)
+        # intunsort = t_two[np.sort(two_ix)].data
 
         # DON'T update 'lsuma' before 'the intersections'
-        lsuma[0] = new_sum.loc[idxs]
+        # lsuma[0] = new_sum.loc[idxs]
+        lsuma[0] = new_sum
         # lsuma[0] = new_sum.loc[intersect]
 
-        if contar_int != 0:
+        if contar_int > 0:
             # painful but necessary ('u4') because maxima is clipped to 'zero'
             # 1 has to be subtracted 4.all intersected-sums after 1st iteration!
 
-            # # WHY NOT?? (saves one computation!)
-            # tmp_rain = xr.concat(list(map(lambda x: x.loc[intersect], lrain)),
-            #                      dim='time',).groupby('time').sum().astype('u4')
-            tmp_rain = xr.concat(
-                list(map(lambda x: x.loc[np.isin(x['time'], idxs)], lrain)),
-                dim='time',).groupby('time').sum().astype('u4')
-            # tmp_rain = xr.concat([
-            #     lrain[0].loc[np.isin(lrain[0]['time'], idxs)],
-            #     lrain[1].loc[np.isin(lrain[1]['time'], idxs)] - 1],
+            # # # WHY NOT?? (saves one computation!)
+            # # tmp_rain = xr.concat(list(map(lambda x: x.loc[intersect], lrain)),
+            # #                      dim='time',).groupby('time').sum().astype('u4')
+            # tmp_rain = xr.concat(
+            #     list(map(lambda x: x.loc[np.isin(x['time'], idxs)], lrain)),
             #     dim='time',).groupby('time').sum().astype('u4')
+            # # tmp_rain = xr.concat([
+            # #     lrain[0].loc[np.isin(lrain[0]['time'], idxs)],
+            # #     lrain[1].loc[np.isin(lrain[1]['time'], idxs)] - 1],
+            # #     dim='time',).groupby('time').sum().astype('u4')
+            tmp_rain = xr.concat((lrain[0], lrain[-1].loc[undr]), dim='time',
+                                 ).groupby('time').sum().astype('u4')
 
             # # THIS IS also CORRECT!
             # tmp_rain.loc[intersect][tmp_rain.loc[intersect] >= 4] =\
@@ -1547,12 +1532,15 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
             tmp_rain.loc[intersect] = tmp_rain.loc[intersect].where(
                 tmp_rain.loc[intersect] < 4, tmp_rain.loc[intersect] - 1)
             # capping maxima again
-            tmp_rain = tmp_rain.where(tmp_rain <= maxima, maxima).astype(RAINFMT)
+            tmp_rain = tmp_rain.where(tmp_rain <= maxima, maxima)
         else:
-            tmp_rain = lrain[-1].loc[intersect]
+            # tmp_rain = lrain[-1].loc[intersect]
+            # np.equal(undr, intunsort).all()
+            # tmp_rain = lrain[-1].loc[intunsort]
+            tmp_rain = lrain[-1].loc[undr]
             # no need to cap maxima here (no sum of nothing here)
         # update also lrain[0] (so always to only have a 2-element list!)
-        lrain[0] = tmp_rain
+        lrain[0] = tmp_rain.astype(RAINFMT)
 
         # remove last item so always to only have a 2-element list!
         del lrain[-1]
@@ -1610,14 +1598,13 @@ def wrapper(NC_NAMES):
 
 #%%
     # FOR EVERY FILE/SIMULATION
-    for nsim, sim_file in enumerate(NC_NAMES):
-        # nsim=0; sim_file=NC_NAMES[nsim]
+    for nsim, sim_file in enumerate(NC_NAMES):  # nsim=0; sim_file=NC_NAMES[nsim]
 
         print(f'\tRUN: {"{:02d}".format(nsim + 1)}/{"{:02d}".format(len(NC_NAMES))}')
         print('progress')
         print('********')
 
-        nc = nc4.Dataset(sim_file, 'w', format='NETCDF4',)#set_auto_mask=False)
+        nc = nc4.Dataset(sim_file, 'w', engine='h5netcdf')#, format='NETCDF4',)#set_auto_mask=False)
         nc.created_on = datetime.now(tzlocal()).strftime('%Y-%m-%d %H:%M:%S %Z')#%z
 
         # # 1ST FILL OF THE NC.FILE (defining global vars & CRS)
@@ -1656,20 +1643,24 @@ def wrapper(NC_NAMES):
                 # scale (or not) the total seasonal rainfall
                 # using '(simy + 1)' starts the increase right from the first year
                 reg_tot = region_s['rain'].iloc[nreg] *\
-                    # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
                     (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
-                # reg_tot = 50.  # for testing!
+                    # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+                # reg_tot = 10.  # for testing!
 
                 reg_rain, cum_out = loop(
                     reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
                     nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
                     )
 
-                # where the rain must be placed
-                what = np.intersect1d(time_seas, reg_rain['time'],
-                                      assume_unique=True, return_indices=True)
-                sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
-                    sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+                # # where the rain must be placed
+                # what = np.intersect1d(time_seas, reg_rain['time'],
+                #                       assume_unique=True, return_indices=True)
+                # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
+                #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+                # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
+
+                reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
+                sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
 
                 collect()
 
@@ -1680,10 +1671,10 @@ def wrapper(NC_NAMES):
             # store.mean.stats as CSV.file (less memory when using INT)
             if output_stats_ == 1:
                 zumaz = xr.DataArray(sub_grp[RAIN_NAME][:])
-                # zumaz = zumaz.where(zumaz >= 2, 0)  # if storing 1 (ones)
+                # zumaz = zumaz.where(zumaz >= 2, 0)  # if storing 1's (ones)
                 zumaz = zumaz.sum(dim='dim_0').astype('u4')
                 zumaz = zumaz * SCL + ADD
-                zumaz = zumaz.where(zumaz >= 0., 0.).round(3)
+                zumaz = zumaz.where(zumaz >= 0., 0.).round(3)  # if storing 0's
                 cum_nc = []
                 for rr in region_s['npma']:
                     cum_nc.append(zumaz.data[rr.astype(bool)].sum() / rr.sum())
@@ -1706,6 +1697,8 @@ def wrapper(NC_NAMES):
             if RAINFMT[0] != 'f':
                 sub_grp[RAIN_NAME].scale_factor = SCL
                 sub_grp[RAIN_NAME].add_offset = ADD
+
+            collect()
 #%%
 
         nc.close()
