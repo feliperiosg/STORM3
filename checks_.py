@@ -4,10 +4,8 @@ from pathlib import Path
 from datetime import datetime
 from argparse import ArgumentParser
 from warnings import warn
-# from parameters import *
-from parameters import NUMSIMS, NUMSIMYRS, PTOT_SC, PTOT_SF
-from parameters import STORMINESS_SC, STORMINESS_SF
-from parameters import OUT_PATH, DEM_FILE, SHP_FILE, Z_CUTS
+from parameters import NUMSIMS, NUMSIMYRS, SEED_YEAR, PTOT_SC, PTOT_SF, OUT_PATH
+from parameters import DEM_FILE, SHP_FILE, Z_CUTS, STORMINESS_SC, STORMINESS_SF
 from dateutil.tz import tzlocal
 # https://stackoverflow.com/a/248066/5885810
 from os.path import abspath, dirname, join, exists
@@ -33,6 +31,7 @@ class parse:
         --------
         n_sims : int; indicates the number of simulations/files to output.
         n_sims_y : int; indicates the number of years (per simulation) to run.
+        year : int; indicates the (date) year of the simulation.
         ptot_sc : list; Step Change factors in observed wetness.
         ptot_sf : list; Progressive Trend factors in observed wetness.
         storm_sc : list; Step Change factors in observed storminess.
@@ -46,6 +45,7 @@ class parse:
         # assign the global/default parameters (to inner variables)
         self.numsims = kwargs.get('n_sims', NUMSIMS)
         self.numsimyrs = kwargs.get('n_sims_y', NUMSIMYRS)
+        self.seed_year = kwargs.get('year', SEED_YEAR)
         self.ptot_sc = kwargs.get('ptot_sc', PTOT_SC)
         self.ptot_sf = kwargs.get('ptot_sf', PTOT_SF)
         self.storm_sc = kwargs.get('storm_sc', STORMINESS_SC)
@@ -107,6 +107,10 @@ class parse:
             help='Number of years per Simulation (default: %(default)s)'
             )
         self.input.add_argument(
+            '-a', '--SEED_YEAR', type=int, default=self.seed_year,
+            help='Year (XXXX) to pin-down the Simulation (default: %(default)s)'
+            )
+        self.input.add_argument(
             '-ps', '--PTOT_SC', default=self.ptot_sc, type=self.none_too,
             nargs='+',  # type=float,
             help='Relative change in the seasonal rain equally applied to '
@@ -152,12 +156,14 @@ class welcome:
         storm_sf : list; Progressive Trend factors in observed storminess.
         n_sims : int; indicates the number of simulations/files to output.
         n_sims_y : int; indicates the number of years (per simulation) to run.
+        year : int; indicates the (date) year of the simulation.
         out_path : char; where to store the simulations.\n
         Output -> list; containing output file-paths/names.
         """
         # assign the global/default parameters (to inner variables)
         self.numsims = kwargs.get('n_sims', NUMSIMS)
         self.numsimyrs = kwargs.get('n_sims_y', NUMSIMYRS)
+        self.seed_year = kwargs.get('year', SEED_YEAR)
         self.ptot_sc = kwargs.get('ptot_sc', PTOT_SC)
         self.ptot_sf = kwargs.get('ptot_sf', PTOT_SF)
         self.storm_sc = kwargs.get('storm_sc', STORMINESS_SC)
@@ -247,6 +253,7 @@ class welcome:
         print('************\n')
         print(f'number of simulations: {self.numsims}')
         print(f'years per simulation : {self.numsimyrs}')
+        print(f'simulation seed year : {self.seed_year}')
         for j in self.wet_hash.Var2:
             print(f'{self.wet_hash[self.wet_hash.Var2.isin([j])].Var3.iloc[0]} scenarios '
                   f'({" | ".join([f"sim{x+1}" for x in range(self.numsims)])}):  '

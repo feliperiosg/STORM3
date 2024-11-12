@@ -35,6 +35,9 @@ from scipy.ndimage import gaussian_filter, uniform_filter
 from numpy import random as npr
 from statsmodels.distributions.copula.api import GaussianCopula
 
+# import dask.array as da
+from dask import array, delayed
+
 from osgeo import gdal
 # https://gdal.org/api/python_gotchas.html#gotchas-that-are-by-design-or-per-history
 # https://github.com/OSGeo/gdal/blob/master/NEWS.md#ogr-370---overview-of-changes
@@ -57,7 +60,6 @@ from pointpats import PoissonPointProcess, random, Window  # , PointPattern
 import matplotlib.pyplot as plt
 from functools import reduce
 from operator import iconcat, itemgetter
-# from chunking import CHUNK_3D
 from parameters import *
 from pdfs_ import betas, circular, elevation, field, masking
 
@@ -102,10 +104,11 @@ and didn't cause problems when running "fitter" either.
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
 output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
-tunnin = 7
+tunnin = 5
+
 
 minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
-year_z = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
+SEED_YEAR = SEED_YEAR if SEED_YEAR else datetime.now().year  # SEED_YEAR = []?
 
 # convert DATE_ORIGIN into 'datetime'
 # https://stackoverflow.com/a/623312/5885810
@@ -305,7 +308,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # storing local coordinates (Y-axis)
     yy = nc.createVariable(
         'projection_y_coordinate', 'i4', dimensions=('y'),
-        # chunksizes=CHUNK_3D([len(xpace.ys)], valSize=4),
         )
     yy[:] = xpace.ys
     yy.coordinates = 'projection_y_coordinate'
@@ -316,7 +318,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # storing local coordinates (X-axis)
     xx = nc.createVariable(
         'projection_x_coordinate', 'i4', dimensions=('x'),
-        # chunksizes=CHUNK_3D([len(xpace.xs)], valSize=4),
         )
     xx[:] = xpace.xs
     xx.coordinates = 'projection_x_coordinate'
@@ -361,7 +362,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # # (Y-axis)
     # yy = nc.createVariable(
     #     'latitude', 'f8', dimensions=('y', 'x'),
-    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
     #     )
     # yy[:] = lat
     # yy.coordinates = 'latitude'
@@ -372,7 +372,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # # (X-axis)
     # xx = nc.createVariable(
     #     'longitude', 'f8', dimensions=('y', 'x'),
-    #     chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=8),
     #     )
     # xx[:] = lon
     # xx.coordinates = 'longitude'
@@ -384,7 +383,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # store the MASK
     ncmask = nc.createVariable(
         'mask', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
-        # chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
         )
     ncmask[:] = xpace.catchment_mask
     ncmask.grid_mapping = sref_name
@@ -396,7 +394,6 @@ parameters to generate some consistency when reading future? random rain-fields.
     # store the kmeans/regions
     kmeans = nc.createVariable(
         'regions', 'i1', dimensions=('y', 'x'), zlib=True, complevel=9,
-        # chunksizes=CHUNK_3D([len(xpace.ys), len(xpace.xs)], valSize=1),
         fill_value=-1,
         )
     # kmeans[:] = -1
@@ -437,7 +434,6 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
     # storing dates (time-axis)
     timexx = sub_grp.createVariable(
         nctnam, TIMEINT, dimensions=('time'), fill_value=TIMEFIL,
-        # chunksizes=CHUNK_3D([len(times)], valSize=4),
         )
     timexx[:] = times
     timexx.long_name = 'starting time'
@@ -454,7 +450,6 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
         # DOING.FLOATS
         ncvarx = sub_grp.createVariable(
             ncvnam, datatype=f'{RAINFMT}', dimensions=('time', 'y', 'x'),
-            # chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
             zlib=True, complevel=9, least_significant_digit=3, fill_value=np.nan,
             )
     else:
@@ -462,7 +457,6 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
         ncvarx = sub_grp.createVariable(
             ncvnam, datatype=f'{RAINFMT}', dimensions=('time', 'y', 'x'),
             zlib=True, complevel=9,
-            # chunksizes=CHUNK_3D([len(times), len(xpace.ys), len(xpace.xs)], valSize=2),
             fill_value=np.array(0).astype(f'{RAINFMT}'),  # 0 is filling!
             )
         """
@@ -929,7 +923,8 @@ def base_round(stamps, **kwargs):
     if kase == 'floor':
         iround = (base * (np.ceil(stamps / base) - 1))  # .astype(TIMEINT)
     elif kase == 'nearest':
-        iround = (base * (stamps / base).round()).round(ndec)  # .astype(TIMEINT)
+        # iround = (base * (stamps / base).round(0)).round(ndec)  # .astype(TIMEINT)
+        iround = (base * np.round(stamps / base, 0)).round(ndec)  # .astype(TIMEINT)
     else:
         raise TypeError("Wrong method passed!\n"
                         "Pass 'floor' or 'nearest' to the 'method' argument.")
@@ -1063,6 +1058,7 @@ def quantum_time(doy_par, tod_par, DUR_S, date_pool, n, **kwargs):
 # %% raster
 
 def moving_storm(dir_par, vel_par, stridin, centres, **kwargs):
+# dir_par=DIRMOV[nreg]; vel_par=VELMOV[nreg]; stridin=STRIDE; centres=CENT.samples
     """
     samples storm direction and velocity; and moves storm initial centres along.\n
     Input ->
@@ -1088,17 +1084,22 @@ def moving_storm(dir_par, vel_par, stridin, centres, **kwargs):
     azimut = cs_dir.samples(len(i_lens), data_type='dir')
 
     # displace the storm_centres
-    pad_i = list(map(lambda x: np.concat(([0], x[:-1])), stridin))
+    # pad_i = list(map(lambda x: np.concat(([0], x[:-1])), stridin))
+    pad_i = list(map(lambda x: np.concat(([0], x[:-1])) * 3600, stridin))
     # update 'wspeed' to 's_stat'
     # wspeed = wspeed if s_stat is None else list(map(eval(f'np.{s_stat}'), wspeed))
     wspeed = list(map(eval(f'np.{s_stat}'), wspeed))
-    stride = list(map(np.cumsum, list(map(np.multiply, wspeed, pad_i))))
-    # these "deltas" are computational faster (by 3x) than:
-    # deltax = list(map(lambda s, a: s * 1000 * np.cos(a), stride, azimut))
-    # ... but be mindful that strictly speaking STRIDE is the one to "* 1000"!
-    # "* 1000" because the velocity is in m/s but the reference.grid is in km!
-    deltax = list(map(np.multiply, stride, np.cos(azimut) * 1000))  # (in km!)
-    deltay = list(map(np.multiply, stride, np.sin(azimut) * 1000))  # (in km!)
+
+    stride = list(map(np.cumsum, list(map(np.multiply, wspeed, pad_i))))  # -> in meters!!
+    # # these "deltas" are computational faster (by 3x) than:
+    # # deltax = list(map(lambda s, a: s * 1000 * np.cos(a), stride, azimut))
+    # # ... but be mindful that strictly speaking STRIDE is the one to "* 1000"!
+    # # "* 1000" because the velocity is in m/s but the reference.grid is in km!
+    # deltax = list(map(np.multiply, stride, np.cos(azimut) * 1000))  # (in km!)
+    # deltay = list(map(np.multiply, stride, np.sin(azimut) * 1000))  # (in km!)
+    deltax = list(map(np.multiply, stride, np.cos(azimut) * 1))  # (in meters!)
+    deltay = list(map(np.multiply, stride, np.sin(azimut) * 1))  # (in meters!)
+
     # updated-and-aggregated centers
     x_s = list(map(np.add, centres[:, 0], deltax))
     y_s = list(map(np.add, centres[:, 1], deltay))
@@ -1250,7 +1251,7 @@ def rasterize(ring_set, outer_ring, **kwargs):
 
 
 def rain_cube(c_ring, last_r, t_stamp, np_mask, **kwargs):
-# t_stamp=list(time_idx.keys());
+# t_stamp=list(time_idx.keys()); space=SPACE; max_=iMAX
     """
     creates a rainfall cube (potentially) with regional rain already achieved.\n
     Input ->
@@ -1305,6 +1306,70 @@ def rain_cube(c_ring, last_r, t_stamp, np_mask, **kwargs):
     return void, suma_
 
 
+def rain_cube_dask(c_ring, last_r, t_stamp, np_mask, **kwargs):
+# t_stamp=list(time_idx.keys()); space=SPACE; max_=iMAX
+    """
+    creates a rainfall cube (potentially) with regional rain already achieved.\n
+    Input ->
+    *c_ring* : tuple; geopandas.GeoDataFrame linerings geometry with rain.
+    *last_r* : tuple; pandas.Series; polygon geometry with outermost (rain) ring.
+    *t_stamp* : list; numpy integers representing time-steps since origin.
+    *np_mask* : numpy; 2D-numpy with 1's representing the rain-region.\n
+    **kwargs ->
+    space : class; class where spatial variables are defined.
+    max_val : float; maximum value for rainfall allowed.\n
+    Output -> tuple; xarray.DataArray(s) with rounded rainfall (first) and \
+        total rainfall (within n-region) for every time-stamp (last).
+    """
+    space = kwargs.get('space', SPACE)
+    max_ = kwargs.get('max_val', iMAX)
+
+    tmp_mask = array.from_array(np_mask, chunks='auto',)
+    tot_pix = np_mask.sum()  # pixels in mask
+    # # create empty dask xarray
+    # vals = delayed(np.zeros)(len(c_ring) * len(space.ys) * len(space.xs))
+    # vaid = array.from_delayed(value=vals, shape=(len(c_ring), len(space.ys),
+    #                                              len(space.xs)), dtype=RAINFMT)
+    # # vaid.visualize()
+
+    # create empty array to store sums
+    suma = []
+    dain = []
+    for i in np.r_[0:5]:  # i=0
+        tmpslice = rasterize(c_ring[i], last_r[i],)
+        tmpslice = array.from_array(tmpslice.astype('f4'), chunks='auto',) # chunks='0.09 MiB',
+        # my_ufunc  = array.gufunc(base_round, signature='()->()',
+        #                          output_dtypes='f4', vectorize=False,)
+        # tmpslice = my_ufunc(tmpslice, method='nearest', base=PRECISION,)
+        tmpslice = array.apply_gufunc(
+            base_round, '()->()', tmpslice, output_dtypes='f4',
+            vectorize=False, method='nearest', base=PRECISION,
+            )
+        tmpslice[tmpslice > max_] = max_  # capping above maxima
+        # only keep rainfall inside the mask
+        tmpslice[tmp_mask == 0] = 0.
+        # compute sum here, before changing to INTeger
+        suma.append(tmpslice.sum().compute() / tot_pix)
+        # now do the INTransformation
+        tmpslice = ((tmpslice - ADD) / SCL)
+        tmpslice = array.apply_gufunc(np.round, '()->()', tmpslice,
+                                      output_dtypes=RAINFMT, vectorize=True,)
+        # only keep rainfall larger than zero (i.e., 1 INT)
+        tmpslice[tmpslice == 1] = 0
+        # tmpslice.visualize()
+        # tmpslice.compute()
+        dain.append(tmpslice)
+    dain = array.stack(dain, axis=0)
+    # dain.visualize()
+    """
+    dividing by TOT_PIXimplies REACHING the MEAN (in the stopping criterium).
+    if one wants the 'granular' MEDIAN, something else has to be thought about!
+    """
+    suma_ = xr.DataArray(data=np.array(suma), coords={'time': void['time']},)
+    # suma = (void.sum(dim=('x', 'y')) * SCL + ADD) / tot_pix
+    return void, suma_
+
+
 # %% main loop
 
 def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date_pool):
@@ -1340,6 +1405,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
     # until total rainfall is reached or no more storms to compute!
     while CUM_S < train and NUM_S >= 2:
     # while contar_int < 1 and NUM_S >= 2:  # does the cycle 1x maximum!
+        collect()
 #%%
         # sample random storm centres
         CENT = scentres(mask_shp, NUM_S)  # CENT.plot()
@@ -1358,6 +1424,8 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
 
         # computing time
         MATE, STRIDE = quantum_time(DOYEAR[nreg], DATIME[nreg], DUR_S, date_pool, NUM_S)
+        # plt.plot(range(len(MATE)), MATE, color='g')
+        # pd.DataFrame({'time':MATE}).groupby('time').size().plot()
         group_idx = np.array(list(map(len, STRIDE))).cumsum()[:-1]
         time_idx = pd.DataFrame(MATE).groupby([0], sort=False).indices  # unsorted
         # time_idx = pd.DataFrame(MATE).groupby([0], sort=True).indices  # sorted
@@ -1445,7 +1513,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         # # # https://stackoverflow.com/a/38679861/5885810  (itemgetter)
         # # # ... but it did NOT allow for pd.concat (when only having one)
         # # c_ring = list(map(lambda x: pd.concat(itemgetter(*x)(rings), ignore_index=True), ...))
-
+#%%
         # returns a time-sorted & void.trimmed (xarray) rainfall cube
         # the minimum value in the cube is the data.resolution (i.e., NO ZEROS)
         rain, suma = rain_cube(c_ring, last_r, list(time_idx.keys()), np_mask)
@@ -1561,6 +1629,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         '(i.e., parameter "NUM_S"). If the problem persists, it might be '\
         'likely that the parameterization is not adequate.'
 
+    collect()
     # lrain[0] = lrain[0].where(np_mask == 1, 0)
     # MAYBE THE 1.MASK SHOULD HAPPEN HERE
     return lrain[0], kum_s
@@ -1568,7 +1637,7 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
 
 # %% wrapper
 
-def wrapper(NC_NAMES):
+def wrapper(NC_NAMES, year_z):
 #%%
     global SPACE
 
@@ -1598,7 +1667,8 @@ def wrapper(NC_NAMES):
 
 #%%
     # FOR EVERY FILE/SIMULATION
-    for nsim, sim_file in enumerate(NC_NAMES):  # nsim=0; sim_file=NC_NAMES[nsim]
+    for nsim, sim_file in enumerate(NC_NAMES):
+    # nsim=0; sim_file=NC_NAMES[nsim]
 
         print(f'\tRUN: {"{:02d}".format(nsim + 1)}/{"{:02d}".format(len(NC_NAMES))}')
         print('progress')
@@ -1611,6 +1681,8 @@ def wrapper(NC_NAMES):
         # sub_grp, tag_y, tag_x = nc_file_i(nc, nsim,)
         nc, tag_y, tag_x = nc_file_iv(nc,)
         nc['regions'][:] = region_s['kmeans'].astype('i1')
+
+        nc.close()
 
 #%%
         # FOR EVERY YEAR of the SIMULATION
@@ -1625,6 +1697,8 @@ def wrapper(NC_NAMES):
                 ).total_seconds() * TIME_DICT_[TIME_OUTNC]).astype(TIMEINT).values
 
             # # 2ND FILL OF THE NC.FILE (creating the TIME & RAIN vars)
+            nc = nc4.Dataset(sim_file, 'a', engine='h5netcdf')#, format='NETCDF4',)#set_auto_mask=False)
+
             sub_grp = nc_file_v(nc, iyear, time_seas, tag_y, tag_x,)
             sub_grp[RAIN_NAME].set_auto_mask(False)  # CRUCIAL for SPEED
 
@@ -1673,6 +1747,21 @@ def wrapper(NC_NAMES):
 
             # MAYBE THE 1.MASK SHOULD HAPPEN HERE
 
+            """
+            this is the only right place to assign the SCL and ADD attributes\
+            to the 'sub_grp[RAIN_NAME]' variable. ONLY HERE, and only after the\
+            the whole variable has been set and filled up.
+            you'd have serious problems (i.e., errors in the variable.values\
+            when reading them (back) from the nc.file). please DO NOT be stupid!
+            """
+            if RAINFMT[0] != 'f':
+                sub_grp[RAIN_NAME].scale_factor = SCL
+                sub_grp[RAIN_NAME].add_offset = ADD
+
+            nc.close()
+            collect()
+#%%
+
             # store.mean.stats as CSV.file (less memory when using INT)
             if output_stats_ == 1:
                 zumaz = xr.DataArray(sub_grp[RAIN_NAME][:])
@@ -1691,22 +1780,6 @@ def wrapper(NC_NAMES):
                     'mean_nc': [x.round(4) for x in cum_nc],
                     }).to_csv(sim_file.replace('.nc', '_stats.csv'), sep=',',
                               mode='a', index=False)
-
-            """
-            this is the only right place to assign the SCL and ADD attributes\
-            to the 'sub_grp[RAIN_NAME]' variable. ONLY HERE, and only after the\
-            the whole variable has been set and filled up.
-            you'd have serious problems (i.e., errors in the variable.values\
-            when reading them (back) from the nc.file). please DO NOT be stupid!
-            """
-            if RAINFMT[0] != 'f':
-                sub_grp[RAIN_NAME].scale_factor = SCL
-                sub_grp[RAIN_NAME].add_offset = ADD
-
-            collect()
-#%%
-
-        nc.close()
 
 
 # def whopper(NC_NAMOS):
@@ -1740,6 +1813,6 @@ if __name__ == '__main__':
     from checks_ import welcome
     willkommen = welcome()
     NC_NAMES = willkommen.ncs
-    wrapper(NC_NAMES)
+    wrapper(NC_NAMES, SEED_YEAR)
     # NC_NAMES = ['./model_output/01_test_xx.nc']
     # whopper(['./model_output/xxx.nc'])

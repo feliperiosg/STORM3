@@ -14,6 +14,8 @@ For an 'in-prompt' help (on these parameters) type:
 
 NUMSIMS = 1  # Number of runs per Season (one NC.file per simulation)
 NUMSIMYRS = 1  # Number of years per run (per Season)
+SEED_YEAR = 2024
+# SEED_YEAR  = None  # for your SIM/VAL to start in the current year
 
 """
 PTOT_SC       = Signed scalar specifying the step change in the observed wetness (TOTALP)
@@ -171,8 +173,6 @@ DISPERSE_ = .2                          # factor to split MAXD_RAIN into
 
 SEASON_TAG = 'OND'
 # # these parameters allow to pin down a time-dimension to the storms
-# SEED_YEAR  = None                       # for your SIM/VAL to start in the current year
-SEED_YEAR = 2024                        # for your SIM/VAL to start in 2050
 TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
 # # OR:
 # TIME_ZONE    = 'UTC'

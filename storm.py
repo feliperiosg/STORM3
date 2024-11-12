@@ -62,7 +62,7 @@ def compute_storm(one, two):
     from rainfall import update_par, replicate_, wrapper
     update_par(one)
     replicate_()
-    wrapper(two)
+    wrapper(two, one.SEED_YEAR)
 
 
 # %% run
