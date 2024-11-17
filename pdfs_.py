@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from gc import collect
+from glob import glob
 from tqdm import tqdm
 from osgeo import gdal
 from pyproj import CRS
@@ -22,8 +23,9 @@ from rasterio.enums import Resampling  # IF doing BILINEAR or NEAREST too?
 from rasterio.features import shapes
 from rasterio import open as openr
 from matplotlib import pyplot as plt
-from parameters import SHP_FILE, DEM_FILE, WKT_OGC, BUFFER, X_RES, Y_RES, ZON_FILE
-from parameters import PDF_FILE, RAIN_MAP, NREGIONS, SEASON_TAG, Z_CUTS, Z_STAT
+from parameters import SHP_FILE, DEM_FILE, PDF_FILE, ZON_FILE, TER_FILE
+from parameters import WKT_OGC, BUFFER, X_RES, Y_RES, Z_CUTS, Z_STAT
+from parameters import SEASON_TAG, NREGIONS, RAIN_MAP, TER_YEAR
 # from dask.distributed import Client, LocalCluster
 
 # https://stackoverflow.com/a/9134842/5885810  (supress warning by message)
@@ -44,7 +46,7 @@ simplefilter('ignore', category=UserWarning)
 if gdal.__version__.__getitem__(0) == '3':
     gdal.UseExceptions()
     # gdal.DontUseExceptions()
-    # gdal.__version__ # wos_ '3.6.2' # linux_ '3.7.0'
+    # gdal.__version__ # wos_ '3.9.2' # linux_ '3.9.3'
 
 parent_d = dirname(__file__)  # otherwise, will append the path.of.the.tests
 # parent_d = './'  # to be used in IPython
@@ -58,30 +60,9 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 # %% parameters
 
-# EVENT_DATA = './model_input/0326_collect_MAM_track_hadIMERG_.nc'
-EVENT_DATA = './model_input/0326_collect_OND_track_hadIMERG_.nc'
+EVENT_DATA = f'./model_input/0326_collect_{SEASON_TAG}_track_hadIMERG_.nc'
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
-
-# # parameters imported from "parameters.py"
-
-# PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
-# ZON_FILE = './model_input/regions.shp'  # nK regions file
-# SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
-# DEM_FILE = './model_input/HAD_wgs84.tif'  # aoi raster-file (optional**)
-# # RAIN_MAP = './model_input/rainfall_MAM.nc'
-# RAIN_MAP = './model_input/rainfall_OND.nc'
-# NREGIONS = 4
-# SEASON_TAG = 'OND'
-
-# # Z_CUTS = [ 400, 1000]  # [34.2, 67.5]%
-# # Z_CUTS = [1000, 2000, 3000]  # [67.53, 97.15, 99.87]%
-# Z_CUTS = [300,  600, 1200]  # [28.13, 48.75, 78.57]%
-# # Z_CUTS = []
-# # Z_CUTS = None
-
-# BUFFER    =  7000.  # in meters! -> buffer distance (out of the HAD)
-# X_RES     =  5000.  # in meters! (pxl.resolution for the 'regular/local' CRS)
-# Y_RES     =  5000.  # in meters! (pxl.resolution for the 'regular/local' CRS)
+ICPAC_ONLY = 0  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
 
 # # OGC-WKT for HAD [taken from https://epsg.io/42106]
 # WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
@@ -420,7 +401,7 @@ class regional:
 
     def __init__(self, map_prj, mask_bfr, mask_cat, **kwargs):
 
-        self.up_dic = None
+        # self.up_dic = None
         self.wkt_prj = kwargs.get('wkt_prj', WKT_OGC)
         self.n_ = kwargs.get('nr', 1)
         self.statistic = kwargs.get('stat', 'mean')
@@ -433,16 +414,24 @@ class regional:
                 self.realization, self.catchment, self.n_)
             self.morph = self.morphopen(self.regions)
             # self.morph = self.regions
-            self.gshape = self.to_shp(self.morph, self.realization, self.buffer,
-                                      self.catchment, self.wkt_prj)
+            self.gshape = regional.to_shp(
+                self.morph, self.realization, self.buffer, self.catchment,
+                self.wkt_prj
+                )
+            self.gshape = self._update_means(self.realization.rain,
+                                             self.morph, self.gshape)
         else:
             # this means that k-means should NOT be computed!
             self.n_ = np.unique(self.buffer).size - 1  # 0 doesn't count
             self.regions, self.nr_dic = self.n_regions(
                 self.realization, self.catchment, self.buffer, self.statistic)
             self.morph = None
-            self.gshape = self.to_shp(self.regions, self.realization, self.buffer,
-                                      self.catchment, self.wkt_prj)
+            self.gshape = regional.to_shp(
+                self.regions, self.realization, self.buffer, self.catchment,
+                self.wkt_prj
+                )
+            self.gshape = self._update_means(self.realization.rain,
+                                             self.regions, self.gshape)
 
     def n_regions(self, r_eal, catch, buff, statistic):
         """
@@ -509,9 +498,9 @@ class regional:
         """
         split the field into *n_c* k-means.\n
         Input:\n
-        r_eal : 2D.np; rainfall.field [realization].
-        catch : 2D.np; catchment/region.
-        n_c : int; number of clusters.\n
+        *r_eal* : 2D.np; rainfall.field [realization].
+        *catch* : 2D.np; catchment/region.
+        *n_c* : int; number of clusters.\n
         Output -> 2D.numpy with splitted regions; and dic with k_means.per.region.
         """
 
@@ -606,9 +595,8 @@ class regional:
         # return new.astype('u1')
         return new
 
-        # mopen = test.regions; realization = rain_.field_prj; wkt_prj = WKT_OGC
-        # buffer_mask = space.buffer_mask; catchm_mask = space.catchment_mask
-    def to_shp(self, mopen, realization, buffer_mask, catchm_mask, wkt_prj):
+    @staticmethod
+    def to_shp(mopen, realization, buffer_mask, catchm_mask, wkt_prj):
         # np2shp [.rio.transform() IS QUITE OF THE ESSENCE HERE!]
         lopen = list(shapes(mopen, mask=buffer_mask, connectivity=4,
                             transform=realization.rio.transform()))
@@ -645,20 +633,27 @@ class regional:
         wasks = masks.to_crs(crs='EPSG:4326')
         # turn index into column
         wasks.reset_index(inplace=True)
-        # compute updated seasonal rain
-        self.up_dic = self._update_means(realization.rain, mopen, wasks.region)
-        wasks['u_rain'] = np.asarray(list(self.up_dic.values())).ravel()
-        wasks['k_rain'] = np.asarray(list(self.nr_dic.values())).ravel()
         return wasks
 
-    def _update_means(self, mapa, up_reg, reg_lab):
-        # zone = list(reg_lab.keys())
-        zone = reg_lab
+    def _update_means(self, mapa, up_reg, maxkx):
+        zone = maxkx.region
         new_ = [mapa.where(up_reg == i, other=np.nan).mean().data for i in
                 np.array(zone, dtype='u2')]
-        return dict(zip(zone, new_))
+        up_dic = dict(zip(zone, new_))
+        maxkx['u_rain'] = np.asarray(list(up_dic.values())).ravel()
+        maxkx['k_rain'] = np.asarray(list(self.nr_dic.values())).ravel()
+        return maxkx
 
     def xport_shp(self, **kwargs):
+        """
+        exports as shp.file from a geopandas input.\n
+        Input: none.\n
+        **kwargs ->
+        driver : char; output's driver (default: 'ESRI Shapefile').
+        layer : char; output's layer name/title.
+        file : char; path to output shapefile.\n
+        Output -> shapefile stored at 'file'.
+        """
         drvr = kwargs.get('driver', 'ESRI Shapefile')
         lyr = kwargs.get('layer', None)
         prnt = kwargs.get('file', ZON_FILE)
@@ -846,14 +841,19 @@ class circular:
             self.met_cap = kwargs.get('met_cap', 0.9)
             self.criterion = kwargs.get('criterion', 'BIC')
             self._criteria, self.opt_mix, self.model_0 = None, None, None
-            # fit n models & pick up the optimum
-            self._fit_n_models(self.data, self.max_mix)
-            # parameters initial set up
-            self.phi_ = self.model_0.means_.ravel()
-            self.kappa_ = self._estimate_kappa(self.model_0, self.data)
-            self.alpha_ = self.model_0.weights_
-            self.mix_str = None
-            self._vmtab = self.fit()
+            # the loop below is necessary as the FIT of the gaussian initial...
+            # guess(es) were causing in some iterations inconsistent ALPHA_
+            alps = np.array([-1])
+            while (alps < 0).any() or (alps > 1).any() or abs(alps.sum() - 1.) > 1e-3:
+                # print(alps); print(alps.sum())
+                self._fit_n_models(self.data, self.max_mix)  # fit_pick optimum
+                # parameters set up
+                self.phi_ = self.model_0.means_.ravel()
+                self.kappa_ = self._estimate_kappa(self.model_0, self.data)
+                self.alpha_ = self.model_0.weights_
+                self.mix_str = None
+                self._vmtab, self._vmini = self.fit()
+                alps = self._vmtab.alpha.values
         else:
             raise TypeError("Invalid data type!\nErroneous data type passed. "
                             "Only DICTIONARY or NUMPY accepted.")
@@ -1044,10 +1044,11 @@ class circular:
 
 # https://www.lancaster.ac.uk/staff/drummonn/PHYS281/demo-classes/
     @staticmethod
-    def find_best_parameters(data, **kwargs):
+    def find_best_parameters(arr, **kwargs):
         """
         estimates the optima parameters for a von Mises model of n-mixtures.\n
-        Input: np.array.\n
+        Input ->
+        *arr* : numpy.array; numeric array.\n
         **kwargs ->
         best_model : *sklearn.mixture._gaussian_mixture.GaussianMixture*.
         n_mix      : int; must be provided if *best_model* is not.
@@ -1057,7 +1058,7 @@ class circular:
         Output -> list with pd.DataFrame (optima pars) and str.model
         """
     # initial reading
-        data_p = data.reshape(-1, 1)  # one may use this caopy later
+        data_p = arr.reshape(-1, 1)  # one may use this copy later
         best_model = kwargs.get('best_model', None)
         n_mix = kwargs.get('n_mix', None)
     # how many mixtures?
@@ -1076,8 +1077,13 @@ class circular:
         kappa_ = kwargs.get('kappa_', np.ones(n_mix))
         alpha_ = kwargs.get('alpha_', np.repeat(1 / n_mix, n_mix))
 
+    # initial guess
+        ini_params = pd.DataFrame(
+            index=[f'm{str(i+1)}' for i in range(n_mix)],
+            data={'alpha': alpha_, 'phi': phi_, 'kappa': kappa_})
+
     # compute the probs from a histogram (and modify data accordingly)
-        probs, data = np.histogram(data, bins=24*4*3*1, density=True)
+        probs, data = np.histogram(arr, bins=24*4*3*1, density=True)
         data = (data[1:] + data[:-1]) / 2
         variation = True
 
@@ -1108,17 +1114,17 @@ class circular:
                   'phi': [result.values[x] for x in nu],
                   'kappa': [result.values[x] for x in ka]})
     # return model.string and pars
-        return fit_params, str_0
+        return str_0, fit_params, ini_params
 
     def fit(self,):
-        parameters, self.mix_str = circular.find_best_parameters(
+        self.mix_str, parameters, initial = circular.find_best_parameters(
             self.data, best_model=self.model_0, phi_=self.phi_,
             kappa_=self.kappa_, alpha_=self.alpha_)
     # updating the parameters in the class
         self.phi_ = parameters.phi.values
         self.kappa_ = parameters.kappa.values
         self.alpha_ = parameters.alpha.values
-        return parameters
+        return parameters, initial
 
     def save(self, file, region, tag):
         with open(file, 'a') as f:
@@ -1596,7 +1602,7 @@ class betas:
 
     def pd_base(self, cset):
         """
-        add estra variables to enable model fitting/optimization/solving.\n
+        adds extra variables to enable model fitting/optimization/solving.\n
         Input ->
         *cset* : pd.DataFrame; with fields\
             'pf_maxrainrate' & 'radii'-or-'area' & 'avgrainrate'-or-'rratio'.\n
@@ -1989,12 +1995,10 @@ def totals(set_tot, area_km):
 
 # # reading MONTHLY.IMERG (for a given season)
 # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# from glob import glob
-
 # sdic = {'MAM': [3, 4, 5], 'OND': [10, 11, 12]}
 
 # def imorg(year):  # year=2000; year=2021
-#     flist = glob(f'../SETS/imerg_m/3B-MO*{year}*' )
+#     flist = glob(f'../SETS/imerg_m/3B-MO*{year}*')
 #     ix = np.isin(list(map(lambda x: int(x.split('E235959')[1][1:3]), flist)), sdic[SEASON_TAG])
 #     flist = [value for bool_, value in zip(ix, flist) if bool_]
 #     if len(flist)!=0:
@@ -2021,11 +2025,155 @@ def totals(set_tot, area_km):
 #     list(filter(None, ilis)), 'time', compat='override', coords='minimal')
 
 
+# %% icpacs casting
+
+class forecasting:
+
+    def __init__(self, xpace, nc_path, **kwargs):  # xpace=SPACE
+        """
+        reads icpac's forecast and transforms it into shp.regions.\n
+        Input:\n
+        *space* : class; class where spatial variables are defined.
+        *nc_path*: char; path to icpac's forecasting nc.file.\n
+        **kwargs\n
+        resampling: rasterio.enums; resampling method.
+        nc_crs: char/pyproj.crs; WKT (well-known text) of icpac's forecast.
+        Output -> a class having a geopandas of icpac-terciles.
+        """
+
+        self._c = 1000  # silly constant
+        self._tags = np.array([-1, 0, 1])
+        self.space = xpace
+        self.nc_icpac = nc_path
+        self.resam = kwargs.get('resampling', Resampling.nearest)  # bilinear
+        self.nc_crs = kwargs.get('nc_crs', CRS('EPSG:4326'))
+        self.icpac = self.reproject()
+        self.mask, self.stat = self.icpac_mask()
+        self.gshape = regional.to_shp(
+            self.mask, self.mask, self.space.buffer_mask.astype('u1'),
+            self.space.catchment_mask.astype('u1'), self.space.wkt_prj
+            )
+        self.gshape['tercile'] = self.stat
+
+    def reproject(self,):
+        """
+        reprojects (to the local grid) the icpac forecast.\n
+        Input: none.\n
+        Output -> tuple; 2D-numpy(s) having the buffer & catchment rasters.
+        """
+        # empty xarray
+        blank = field.empty_map(self.space.xs, self.space.ys, self.space.wkt_prj)
+        # read icpac_nc & assign crs
+        icpac = xr.open_dataset(self.nc_icpac, chunks='auto',
+                                decode_cf=True, mask_and_scale=True,).load()
+        icpac.rio.write_crs(self.nc_crs, grid_mapping_name='spatial_ref',
+                            inplace=True)
+        # pac = icpac.to_stacked_array('p', sample_dims=['LAT', 'LON'], variable_dim='tercile')
+        # pac.plot(x='LON', y='LAT', col='p', col_wrap=3, cmap='gist_ncar_r', robust=False,)
+        icpac = icpac.rename({'LAT': 'y', 'LON': 'x',})
+
+        re_ = icpac.rio.reproject_match(blank, resampling=self.resam)
+        # stack the reprojection (to have only one 3D-variable)
+        se_ = re_.to_stacked_array('p', sample_dims=['y', 'x'],
+                                   variable_dim='tercile')
+        # se_.plot(x='x', y='y', col='p', col_wrap=3, cmap='gist_ncar_r',)
+        return se_
+
+    @staticmethod
+    def split_diff(arr, **kwargs):  # arr = val_ter[0]
+        """
+        adjusts the vector values to sum up 1.\n
+        Input ->
+        *arr* : list; list of numeric array(s).\n
+        **kwargs ->
+        t : int or float; absolute limit representing 1; (default: 100).\n
+        Output -> adjusted numpy-lists where the elements' sum adds up to 1.
+        """
+        tot = kwargs.get('t', 100)
+
+        arr = np.array(arr)  # .round(2)
+        sam = arr.sum()
+        rra = arr + arr / sam * (tot - sam)
+        # return '_'.join(list(map(str, rra.round(3))))
+        return rra
+
+    @staticmethod
+    def dominant_tercile(x, **kwargs):
+        """
+        finds and masks the maximum value of a vector/array.\n
+        Input ->
+        *x* : np.array; numeric array containint icpac terciles.\n
+        **kwargs ->
+        c : int or float; numeric value to mask the dominant tercile with.\n
+        Output -> numpy where the maximum is masked by 'c'.
+        """
+        some_c = kwargs.get('c', 1000)
+
+        y = x.copy()
+        if ~np.isnan(y).all():
+            y[y == np.nanmax(y)] = some_c
+        return y
+
+    def icpac_mask(self, **kwargs):
+        """
+        computes the icpac.mask and its tercile.means.\n
+        Input: none.\n
+        **kwargs ->
+        in_core : list; char list with dimensions found in 'self.icpac'.
+        out_core : list; char list with dimensions found in 'self.icpac'.
+        stat_dim : tuple; char tupe with 'self.icpac' dims to compute stats along.\n
+        Output -> tuple; 2D-numpy of icpac mask (1st), and tercile.means (2nd).
+        """
+        in_dim = kwargs.get('in_core', ['p'])
+        out_dim = kwargs.get('out_core', ['p'])
+        sum_dim = kwargs.get('stat_dim', ('p'))
+
+        maxos = xr.apply_ufunc(
+            forecasting.dominant_tercile, self.icpac,
+            input_core_dims=[in_dim], output_core_dims=[out_dim],
+            kwargs={'c': self._c}, vectorize=True, dask='allowed',
+            )
+        maxos = maxos.where(maxos == self._c, np.nan) / self._c
+        # maxos.plot(x='x', y='y', col='p', col_wrap=3, cmap='turbo',)
+
+        # constructing icpac.mask
+        # ter = maxos * xr.DataArray(data=self._tags, dims={'p'})
+        # ter = ter.sum(dim='p', skipna=True)
+        ter = maxos * xr.DataArray(data=self._tags, dims={sum_dim})
+        ter = ter.sum(dim=sum_dim, skipna=True)
+        # ter = ter.where(~np.isnan(maxos[:, :, 0]), np.nan)
+        # ter.plot(cmap='turbo_r',)
+
+        # computing MEANs of icpac.regions
+        val_ter = [[self.icpac[:, :, j].where(
+            ~(ter.where(self.space.catchment_mask == 1, np.nan)).where(
+                ter == i, np.nan).isnull(), np.nan).mean(skipna=True).data
+            for j in range(self.icpac.shape[-1])] for i in self._tags]
+        # round the MEANs & convert them into a char.string
+        vals_ = list(map(forecasting.split_diff, val_ter))
+        vals_ = ['_'.join(list(map(str, x.round(3)))) for x in vals_]
+        return ter, vals_
+
+    def xport_shp(self, **kwargs):
+        """
+        exports as shp.file from a geopandas input.\n
+        Input: none.\n
+        **kwargs ->
+        driver : char; output's driver (default: 'ESRI Shapefile').
+        layer : char; output's layer name/title.
+        file : char; path to output shapefile.\n
+        Output -> shapefile stored at 'file'.
+        """
+        drvr = kwargs.get('driver', 'ESRI Shapefile')
+        lyr = kwargs.get('layer', None)
+        prnt = kwargs.get('file', ZON_FILE)
+        self.gshape.to_file(prnt, driver=drvr, layer=lyr)
+        return
+
+
 # %% call all
 
-# def compute(region=None):
-#     if region=None:
-def compute():
+def compute(space):  # space = masking()
 
 #  1. SPLITING SHP INTO AOI
     # if reading SEASONAL.MAP with XARRAY
@@ -2037,8 +2185,6 @@ def compute():
     seas = seas.drop_vars('spatial_ref').rename({'lat': 'y', 'lon': 'x'})
     # seas.rain.plot(cmap='gist_ncar', robust=True)
 
-    # space = masking()
-    space = masking(catchment=SHP_FILE)  # space.plot()
     rain_ = field(seas, space.xs, space.ys)
 
     areas = regional(rain_.field_prj, space.buffer_mask.astype('u1'),
@@ -2067,7 +2213,7 @@ def compute():
                            chunked_array_type='dask', chunks='auto')
 
     # for i, r in enumerate(areas.gshape.region):
-    for i, r in enumerate(tqdm(areas.gshape.region, ncols=50)):  # i=0
+    for i, r in enumerate(tqdm(areas.gshape.region, ncols=50)):  # i=2
 
 #  4. DEFINE THE AREA OF ANALYSIS
         # one_area = region()  # if.doing.the.whole.area (also?)
@@ -2187,7 +2333,8 @@ def compute():
         mdir_rad = xr.apply_ufunc(one_vm, mdir, dask='parallelized'#'allowed'
             ,vectorize=True, input_core_dims=[['times',]]).compute().data
         dir_c = circular(mdir_rad[~np.isnan(mdir_rad)], data_type='rad', met_cap=.91)
-        # tod_c.plot_samples(file='zome_file.jpg', data_type='dir', bins=50)
+        # dir_c._vmtab, dir_c._vmtab.sum()
+        # dir_c.plot_samples(file='zome_file.jpg', data_type='dir', bins=50)
         # dir_c.plot_samples(data_type='dir')
         # dir_c.plot_bic()
         dir_c.save(file=FILE_PDF, tag='DIRMOV', region=r)
@@ -2202,6 +2349,7 @@ def compute():
         tod = dset.clip_set.start_basetime.load()
         tod = (tod.dt.hour + tod.dt.minute / 60 + tod.dt.second / 3600).data
         tod_c = circular(tod, data_type='tod', met_cap=.93)
+        # tod_c._vmtab, tod_c._vmtab.sum(), tod_c._vmini, tod_c._vmini.sum()
         # tod_c.plot_samples(data_type='tod', bins=50)
         # tod_c.plot_bic()
         tod_c.save(file=FILE_PDF, tag='DATIME', region=r)
@@ -2209,12 +2357,35 @@ def compute():
 # 18. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
         doy_c = circular(doy, data_type='doy', met_cap=.83)
+        # doy_c._vmtab, doy_c._vmtab.sum()
         # doy_c.plot_samples(data_type='doy', bins=20)
         # doy_c.plot_bic()
         doy_c.save(file=FILE_PDF, tag='DOYEAR', region=r)
 
 
+# %% call pac
+
+def compute_icpac(space):  # space = masking()
+    ifile = glob(f'./model_input/Ens_Prec_*{SEASON_TAG}*-avgRaw{TER_YEAR}.nc')
+    # ifile should be a 1-element list!
+    ifile = abspath(join(parent_d, ifile[0]))
+
+# 19. PRODUCE ICPAC FORECAST SHP
+    assertcast = f'NO ICPAC_CAST!\n'\
+        'You chose to account for the ICPAC forecasting. Nevertheless, the'\
+        f' path to the icpac.nc file {ifile} was not correctly set up or '\
+        'the file does not exist.\n'\
+        'Please ensure that the icpac.nc file exists in the correct path.'
+    if not exists(ifile):
+        raise AssertionError(assertcast)
+
+    forecast = forecasting(space, ifile)
+    # update xport.shp.file name & xport it
+    forecast.xport_shp(file=abspath(join(parent_d, TER_FILE)))
+
+
 # %% main
 
 if __name__ == '__main__':
-    compute()
+    space = masking(catchment=SHP_FILE)  # space.plot()
+    compute_icpac(space) if ICPAC_ONLY == 1 else compute(space)

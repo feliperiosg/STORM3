@@ -61,7 +61,7 @@ import matplotlib.pyplot as plt
 from functools import reduce
 from operator import iconcat, itemgetter
 from parameters import *
-from pdfs_ import betas, circular, elevation, field, masking
+from pdfs_ import betas, circular, elevation, field, masking, forecasting
 
 
 # np.set_printoptions(threshold = np.inf)
@@ -104,7 +104,7 @@ and didn't cause problems when running "fitter" either.
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
 output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
-tunnin = 5
+tunnin = 11
 
 
 minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
@@ -500,15 +500,20 @@ def nc_file_v(nc, iyear, times, ytag, xtag, **kwargs):
 
 # %% regionalisation
 
-def regionalisation(file_zon, tag, xpace):
+def regionalisation(file_zon, tag, val, xpace, **kwargs):
     """
     arrange into a dictionary shp-regions.\n
     Input ->
     *file_zon* : char; path to rain-regions shapefile.
     *tag* : char; geoPandas.GeoDataFrame column used as burning values.
+    *val* : char; geoPandas.GeoDataFrame column used as numeric lead.
     *xpace* : class; class where spatial variables are defined.\n
+    **kwargs ->
+    add : int; signed integer to add to k-means mask.\n
     Output -> dict; ...
     """
+    magik = kwargs.get('add', -1)
+
     reg_shp = gpd.read_file(abspath(join(parent_d, file_zon)))
     # transform it into EPSG:42106 & make the buffer
     # https://gis.stackexchange.com/a/328276/127894  (geo series into gpd)
@@ -526,11 +531,12 @@ def regionalisation(file_zon, tag, xpace):
     # ... then assign 0 everywhere else.
     reg_np = list(map(lambda x: xr.DataArray(k_means).where(
         k_means != x, 1).where(k_means == x, 0).data,
-        np.setdiff1d(np.unique(k_means), -1)))
+        np.setdiff1d(np.unique(k_means), magik)))
     # as long as the GeoDataFrame comes from "pdfs_", it'll always have 'u_rain'
     output = dict(zip(
         ('mask', 'rain', 'npma', 'kmeans'),
-        (reg_shp, reg_shp['u_rain'], reg_np, k_means)
+        # (reg_shp, reg_shp['u_rain'], reg_np, k_means)
+        (reg_shp, reg_shp[val], reg_np, k_means)
         ))
     return output
 
@@ -678,15 +684,17 @@ def truncated_sampling(distro, **kwargs):
     *distro* : dict; contains a scipy.stats (pdf) frozen infrastructure.\n
     **kwargs ->
     limits : tuple; variable limits to sample within.
+    type_l : char; limits nature (either 'prob' or 'var' -> default).
     band : char; key (of the 'distro' dictionary) addressing the frozen pdf.
     n : int; numbers of (random) samples.\n
     Output -> np.array of floats with n-samples.
     """
     limits = kwargs.get('limits', (-np.inf, np.inf))
+    timit = kwargs.get('type_l', 'var')
     band = kwargs.get('band', '')
     n = kwargs.get('n', 1)
     # set up useful range from limits
-    ulims = list(map(distro[band].cdf, limits))
+    ulims = list(map(distro[band].cdf, limits)) if timit == 'var' else limits
     # sample via a uniform.PPF
     sample = distro[band].ppf(npr.uniform(low=ulims[0], high=ulims[-1], size=n))
     # # reproducibility...
@@ -1657,13 +1665,23 @@ def wrapper(NC_NAMES, year_z):
 
     SPACE = masking()  # SPACE.plot()  # SPACE = masking(catchment=SHP_FILE)
 
-    # region_s = regionalisation(ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{9}r.shp'), 'region', SPACE,)
     region_s = regionalisation(
+        # ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{NREGIONS}kc.shp'),
         ZON_FILE.replace('.shp', f'_{SEASON_TAG}_{NREGIONS}r.shp'),
-        'region', SPACE,
+        'region', 'u_rain', SPACE,  # there is NO 'u_rain_ in KC.SHP
         )
     # plt.imshow(region_s['kmeans'], interpolation='none', cmap='turbo')
     # plt.imshow(region_s['npma'][-1], interpolation='none', cmap='plasma_r')
+
+    if TER_FILE:
+        icpac_s = regionalisation(TER_FILE, 'region', 'tercile', SPACE, add=-2)
+        # plt.imshow(icpac_s['kmeans'], interpolation='none', cmap='turbo')
+        # plt.imshow(icpac_s['npma'][-1], interpolation='none', cmap='plasma_r')
+    else:
+        # masks 1s to make.it icpac.compatible
+        icpac_s = {'npma': [region_s['npma'][0].copy()]}
+        icpac_s['npma'][0][:] = 1
+
 
 #%%
     # FOR EVERY FILE/SIMULATION
@@ -1686,7 +1704,7 @@ def wrapper(NC_NAMES, year_z):
 
 #%%
         # FOR EVERY YEAR of the SIMULATION
-        for simy in tqdm(range(NUMSIMYRS), ncols=50):  # simy=0
+        for simy in tqdm(range(NUMSIMYRS), ncols=50):  # simy=0; year_z=2024
 
             iyear = year_z + simy
             mlen, date_pool = wet_days(iyear)
@@ -1703,47 +1721,106 @@ def wrapper(NC_NAMES, year_z):
             sub_grp[RAIN_NAME].set_auto_mask(False)  # CRUCIAL for SPEED
 
             # sampling/updating total seasonal rainfall
+
+            # # delete!!!
+            # if ptot_or_kmean == 1:
+            #     region_s['rain'] = pd.Series(np.ravel(list(map(
+            #         lambda x: truncated_sampling(TOTALP[x], limits=(NO_RAIN, np.inf)),
+            #         range(len(TOTALP))))), name='s_rain',)
+
             if ptot_or_kmean == 1:
-                region_s['rain'] = pd.Series(np.ravel(list(map(
-                    lambda x: truncated_sampling(TOTALP[x], limits=(NO_RAIN, np.inf)),
-                    range(len(TOTALP))))), name='s_rain',)
+                if TER_FILE:
+                    # the lower.lim of 1st.element could lead to ZERO.rainfall!!
+                    terlim = [[0., 1/3], [1/3, 2/3], [2/3, 1.]]
+                    # https://numpy.org/doc/stable/reference/random/bit_generators/index.html
+                    rtg = npr.Generator(npr.PCG64())
+                    tercil = icpac_s['rain'].apply(lambda x: np.array(list(map(float, x.split('_')))))
+                    tercil = tercil.apply(forecasting.split_diff)
+                    wat = tercil.apply(lambda x: rtg.choice(3, size=1) if np.isnan(x).all() else rtg.choice(3, size=1, p=x / 100))
+                    seas_rain = [[truncated_sampling(i, limits=terlim[j[0]], type_l='prob',) for j in wat] for i in TOTALP]
+                else:
+                    seas_rain = [[truncated_sampling(i, limits=(NO_RAIN, np.inf),)] for i in TOTALP]
+            else:
+                seas_rain = [[x] for x in list(map(np.asarray, region_s['rain'].tolist()))]
 
             C_OUT = []  # meaningless array to collect reached cums
 
             # FOR EVERY N_REGION
-            for nreg in tqdm(range(NREGIONS), ncols=50):  # nreg=2
-            # for nreg in tqdm(range(1), ncols=50):  # nreg=0  # for testing!
+            for nreg, srain in enumerate(tqdm(seas_rain, ncols=50)):
+            # nreg=2; srain=seas_rain[nreg]
+                # print(nreg, srain)
+                for jter, ireg in enumerate(tqdm(icpac_s['npma'], ncols=50)):
+                # jter=1; ireg=icpac_s['npma'][jter]
+                    micro_mask = region_s['npma'][nreg] * ireg
+                    # plt.imshow(micro_mask, cmap='turbo', interpolation='none')
+                # the region must be "large" enough to compute rainfall
+                    if micro_mask.sum() > 999:
 
-                # scale (or not) the total seasonal rainfall
-                # using '(simy + 1)' starts the increase right from the first year
-                reg_tot = region_s['rain'].iloc[nreg] *\
-                    (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
-                    # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
-                # reg_tot = 10.  # for testing!
+                        # scale (or not) the total seasonal rainfall
+                        # using '(simy + 1)' starts the increase right from the first year
+                        reg_tot = srain[jter] *\
+                            (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
+                            # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+                        # reg_tot = 10.  # for testing!
 
-                reg_rain, cum_out = loop(
-                    reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
-                    nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
-                    )
+                        reg_rain, cum_out = loop(
+                            reg_tot, region_s['mask'].iloc[nreg], micro_mask,
+                            nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
+                            )
 
-                # # where the rain must be placed
-                # what = np.intersect1d(time_seas, reg_rain['time'],
-                #                       assume_unique=True, return_indices=True)
-                # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
-                #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
-                # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
+                        # # where the rain must be placed
+                        # what = np.intersect1d(time_seas, reg_rain['time'],
+                        #                       assume_unique=True, return_indices=True)
+                        # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
+                        #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+                        # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
 
-                reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
-                sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
-                # # having assigned the 'rain' name
-                # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
-                #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
-                #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
-                #     )
+                        reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
+                        sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
+                        # # having assigned the 'rain' name
+                        # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
+                        #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
+                        #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
+                        #     )
 
-                collect()
+                        collect()
+                        # the line below should be removed??
+                        C_OUT.append(cum_out[-1].data)
 
-                C_OUT.append(cum_out[-1].data)
+            # # FOR EVERY N_REGION
+            # for nreg in tqdm(range(NREGIONS), ncols=50):  # nreg=2
+            # # for nreg in tqdm(range(1), ncols=50):  # nreg=0  # for testing!
+
+            #     # scale (or not) the total seasonal rainfall
+            #     # using '(simy + 1)' starts the increase right from the first year
+            #     reg_tot = region_s['rain'].iloc[nreg] *\
+            #         (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
+            #         # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+            #     # reg_tot = 10.  # for testing!
+
+            #     reg_rain, cum_out = loop(
+            #         reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
+            #         nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
+            #         )
+
+            #     # # where the rain must be placed
+            #     # what = np.intersect1d(time_seas, reg_rain['time'],
+            #     #                       assume_unique=True, return_indices=True)
+            #     # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
+            #     #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+            #     # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
+
+            #     reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
+            #     sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
+            #     # # having assigned the 'rain' name
+            #     # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
+            #     #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
+            #     #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
+            #     #     )
+
+            #     collect()
+
+            #     C_OUT.append(cum_out[-1].data)
 
             # MAYBE THE 1.MASK SHOULD HAPPEN HERE
 

@@ -55,6 +55,10 @@ be passed from the command line. Therefore, their modification/tweaking must
 carried out here.
 """
 
+SEASON_TAG = 'MAM'
+
+TER_YEAR = 2024
+TER_FILE = f'./model_input/tercilesICPAC_{SEASON_TAG}_{TER_YEAR}.shp'
 PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
 # SHP_FILE = './model_input/KC_regions.shp' # regions.by.Katherine.Cocking (WGS84)
 SHP_FILE = './model_input/HAD_basin.shp'  # catchment shape-file in WGS84
@@ -74,7 +78,7 @@ OUT_PATH = './model_output'                             # output folder
 # RAIN_MAP = './realisation_MAM_crs-wrong.nc'  # no..interpretable CRS
 RAIN_MAP = './model_input/rainfall_MAM.nc'  # yes.interpretable CRS
 RAIN_MAP = './model_input/rainfall_OND.nc'  # yes.interpretable CRS
-NREGIONS = 4  # number of regions to split the whole.region into
+NREGIONS = 3  # number of regions to split the whole.region into
 """
 NREGIONS ==1 means no splitting at all!.
 The model still 'splits' the region into 1 big area equal to the catchment.
@@ -171,7 +175,6 @@ from the intenstity-duration copula.
 MAXD_RAIN = 60 * 2                      # in mm
 DISPERSE_ = .2                          # factor to split MAXD_RAIN into
 
-SEASON_TAG = 'OND'
 # # these parameters allow to pin down a time-dimension to the storms
 TIME_ZONE      = 'Africa/Addis_Ababa'               # Local Time Zone (see links below for more names)
 # # OR:
