@@ -1761,7 +1761,7 @@ def wrapper(NC_NAMES, year_z):
                         reg_tot = srain[jter] *\
                             (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
                             # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
-                        reg_tot = 1e-1  # for testing!
+                        # reg_tot = 1e-1  # for testing!
 
                         reg_rain, cum_out = loop(
                             reg_tot, region_s['mask'].iloc[nreg], micro_mask,

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-YEAR=($(seq 2024 1 2026))
+YEAR=($(seq 2024 1 2055))
 
 for ii in "${YEAR[@]}"; do
 	#echo "computing ${ii}"
