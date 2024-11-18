@@ -3,30 +3,30 @@ import rioxarray
 import numpy as np
 import pandas as pd
 import xarray as xr
+from fitter import Fitter
 from gc import collect
+from geopandas import GeoDataFrame, GeoSeries, points_from_xy, read_file, sjoin
 from glob import glob
-from tqdm import tqdm
+from lmfit import Model, Parameters
+from matplotlib import pyplot as plt
+from os.path import abspath, dirname, exists, join
 from osgeo import gdal
 from pyproj import CRS
-from fitter import Fitter
-from skimage import morphology
-from rasterstats import zonal_stats
-from lmfit import Model, Parameters
-from warnings import filterwarnings, warn, simplefilter
-from scipy import optimize, stats, special
-from geopandas import GeoDataFrame, GeoSeries, points_from_xy, read_file, sjoin
-from os.path import abspath, dirname, exists, join
-from statsmodels.distributions.copula.api import GaussianCopula
-from sklearn.cluster import KMeans
-from sklearn.mixture import GaussianMixture
+from rasterio import open as openr
 from rasterio.enums import Resampling  # IF doing BILINEAR or NEAREST too?
 from rasterio.features import shapes
-from rasterio import open as openr
-from matplotlib import pyplot as plt
+from rasterstats import zonal_stats
+from scipy import optimize, stats, special
+from scipy.interpolate import NearestNDInterpolator
+from skimage import morphology
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from statsmodels.distributions.copula.api import GaussianCopula
+from tqdm import tqdm
+from warnings import filterwarnings, warn, simplefilter
 from parameters import SHP_FILE, DEM_FILE, PDF_FILE, ZON_FILE, TER_FILE
 from parameters import WKT_OGC, BUFFER, X_RES, Y_RES, Z_CUTS, Z_STAT
 from parameters import SEASON_TAG, NREGIONS, RAIN_MAP, TER_YEAR
-# from dask.distributed import Client, LocalCluster
 
 # https://stackoverflow.com/a/9134842/5885810  (supress warning by message)
 filterwarnings('ignore', message='You will likely lose important projection '
@@ -62,7 +62,7 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 EVENT_DATA = f'./model_input/0326_collect_{SEASON_TAG}_track_hadIMERG_.nc'
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
-ICPAC_ONLY = 0  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
+ICPAC_ONLY = 1  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
 
 # # OGC-WKT for HAD [taken from https://epsg.io/42106]
 # WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
@@ -2029,7 +2029,7 @@ def totals(set_tot, area_km):
 
 class forecasting:
 
-    def __init__(self, xpace, nc_path, **kwargs):  # xpace=SPACE
+    def __init__(self, space, nc_path, **kwargs):  # xpace=SPACE
         """
         reads icpac's forecast and transforms it into shp.regions.\n
         Input:\n
@@ -2043,7 +2043,7 @@ class forecasting:
 
         self._c = 1000  # silly constant
         self._tags = np.array([-1, 0, 1])
-        self.space = xpace
+        self.space = space
         self.nc_icpac = nc_path
         self.resam = kwargs.get('resampling', Resampling.nearest)  # bilinear
         self.nc_crs = kwargs.get('nc_crs', CRS('EPSG:4326'))
@@ -2055,12 +2055,16 @@ class forecasting:
             )
         self.gshape['tercile'] = self.stat
 
-    def reproject(self,):
+    def reproject(self, **kwargs):
         """
-        reprojects (to the local grid) the icpac forecast.\n
+        reprojects (to the local grid) (and nan-fills) the icpac forecast.\n
         Input: none.\n
+        **kwargs ->
+        base_mask : 2d-numpy; mask over which to interpolate/fill.\n
         Output -> tuple; 2D-numpy(s) having the buffer & catchment rasters.
         """
+        base = kwargs.get('base_mask', self.space.buffer_mask)
+
         # empty xarray
         blank = field.empty_map(self.space.xs, self.space.ys, self.space.wkt_prj)
         # read icpac_nc & assign crs
@@ -2077,6 +2081,21 @@ class forecasting:
         se_ = re_.to_stacked_array('p', sample_dims=['y', 'x'],
                                    variable_dim='tercile')
         # se_.plot(x='x', y='y', col='p', col_wrap=3, cmap='gist_ncar_r',)
+
+        # # filling (to the nearest)
+        # mask = np.where(se_.sum(dim=('p'), skipna=True).where(base == 1, np.nan) != 0)
+        # sf_ = []
+        # for i in range(se_.shape[-1]):
+        #     # https://stackoverflow.com/a/68197821/5885810
+        #     interp = NearestNDInterpolator(np.transpose(mask),
+        #                                    se_[:, :, i].data[mask])
+        #     sf_.append(interp(*np.indices(se_[:, :, i].data.shape)))
+        # sf_ = np.asarray(sf_)
+        # si_ = se_.copy(deep=True)
+        # si_[:] = np.transpose(np.asarray(sf_), (1, 2, 0))
+        # # si_.plot(x='x', y='y', col='p', col_wrap=3, cmap='gist_ncar_r',)
+        # return si_
+
         return se_
 
     @staticmethod
@@ -2128,6 +2147,7 @@ class forecasting:
         out_dim = kwargs.get('out_core', ['p'])
         sum_dim = kwargs.get('stat_dim', ('p'))
 
+        catch_icpac = self.icpac
         maxos = xr.apply_ufunc(
             forecasting.dominant_tercile, self.icpac,
             input_core_dims=[in_dim], output_core_dims=[out_dim],
@@ -2137,8 +2157,6 @@ class forecasting:
         # maxos.plot(x='x', y='y', col='p', col_wrap=3, cmap='turbo',)
 
         # constructing icpac.mask
-        # ter = maxos * xr.DataArray(data=self._tags, dims={'p'})
-        # ter = ter.sum(dim='p', skipna=True)
         ter = maxos * xr.DataArray(data=self._tags, dims={sum_dim})
         ter = ter.sum(dim=sum_dim, skipna=True)
         # ter = ter.where(~np.isnan(maxos[:, :, 0]), np.nan)

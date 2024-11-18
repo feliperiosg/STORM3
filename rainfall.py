@@ -104,7 +104,7 @@ and didn't cause problems when running "fitter" either.
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
 capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
 output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
-tunnin = 11
+tunnin = 7
 
 
 minmax_radius = max([X_RES, Y_RES]) / 1e3  # in km (function of resolution)
@@ -1761,7 +1761,7 @@ def wrapper(NC_NAMES, year_z):
                         reg_tot = srain[jter] *\
                             (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
                             # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
-                        # reg_tot = 10.  # for testing!
+                        reg_tot = 1e-1  # for testing!
 
                         reg_rain, cum_out = loop(
                             reg_tot, region_s['mask'].iloc[nreg], micro_mask,
