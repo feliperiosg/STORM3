@@ -62,7 +62,7 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 EVENT_DATA = f'./model_input/0326_collect_{SEASON_TAG}_track_hadIMERG_.nc'
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
-ICPAC_ONLY = 1  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
+ICPAC_ONLY = 0  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
 
 # # OGC-WKT for HAD [taken from https://epsg.io/42106]
 # WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\

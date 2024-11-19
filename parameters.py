@@ -75,9 +75,8 @@ OUT_PATH = './model_output'                             # output folder
 """
 
 # RAIN_MAP = '../3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'   # no.CRS at all!
-# RAIN_MAP = './realisation_MAM_crs-wrong.nc'  # no..interpretable CRS
-RAIN_MAP = './model_input/rainfall_MAM.nc'  # yes.interpretable CRS
-RAIN_MAP = './model_input/rainfall_OND.nc'  # yes.interpretable CRS
+# RAIN_MAP = f'./realisation_{SEASON_TAG}_crs-wrong.nc'  # no..interpretable CRS
+RAIN_MAP = f'./model_input/rainfall_{SEASON_TAG}.nc'  # yes.interpretable CRS
 NREGIONS = 3  # number of regions to split the whole.region into
 """
 NREGIONS ==1 means no splitting at all!.
