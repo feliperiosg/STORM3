@@ -7,3 +7,7 @@
 
 STORM 3 (STOchastic Rainstorm Model) is the latest upgrade to [STORM 2.0](https://github.com/feliperiosg/STORM2), in which rainfall regionalization, and a continuous discrete time scale are enabled.
 
+## how does it look like?
+<p align="center">
+    <img src=./realisation_MAM-2024_eval.jpg />
+</p>
