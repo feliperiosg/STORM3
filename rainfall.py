@@ -103,7 +103,7 @@ and didn't cause problems when running "fitter" either.
 # %% constants/switches
 
 ptot_or_kmean = 1  # 1 if seasonal.rain sampled; 0 if taken from shp.kmeans
-capmax_or_not = 0  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
+capmax_or_not = 1  # 1 if using MAXD_RAIN as capping limit; 0 if using iMAX
 output_stats_ = 0  # 1 if willing to produce CSV.file; 0 saves some ram.mem
 tunnin = 7
 

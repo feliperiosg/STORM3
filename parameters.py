@@ -57,7 +57,7 @@ carried out here.
 
 SEASON_TAG = 'MAM'
 
-TER_YEAR = 2024
+TER_YEAR = 2025
 TER_FILE = f'./model_input/tercilesICPAC_{SEASON_TAG}_{TER_YEAR}.shp'
 PDF_FILE = './model_input/ProbabilityDensityFunctions.csv'  # pdf.pars file
 # SHP_FILE = './model_input/KC_regions.shp' # regions.by.Katherine.Cocking (WGS84)
