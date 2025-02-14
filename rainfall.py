@@ -15,6 +15,7 @@ import warnings
 # # # https://github.com/slundberg/shap/issues/2909    (suppresing the one from numba 0.59.0)
 # # warnings.filterwarnings('ignore', message=".*The 'nopython' keyword.*")
 
+from os import replace
 # https://stackoverflow.com/a/248066/5885810
 from os.path import abspath, basename, dirname, join
 parent_d = dirname(__file__)    # otherwise, will append the path.of.the.tests
@@ -1629,23 +1630,29 @@ def loop(train, mask_shp, np_mask, nsim, simy, nreg, mlen, upd_max, maxima, date
         NUM_S = int(NUM_S * .9)  # decrease the counter
         contar_int += 1
 
-        # # output checking
-        # print(f'\n CUMsum - PTOT: {CUM_S - train}\n----')
-    # WARN IF THERE IS NO CONVERGING
-    assert not (CUM_S < train and NUM_S < 2), f'Iteration not converging for '\
-        f'REGION [{nreg}] -> YEAR [{simy}] !!\nTry a larger initial seed '\
-        '(i.e., parameter "NUM_S"). If the problem persists, it might be '\
-        'likely that the parameterization is not adequate.'
+    #     # # output checking
+    #     # print(f'\n CUMsum - PTOT: {CUM_S - train}\n----')
+    # # WARN IF THERE IS NO CONVERGING
+    # assert not (CUM_S < train and NUM_S < 2), f'Iteration not converging for '\
+    #     f'REGION [{nreg}] -> YEAR [{simy}] !!\nTry a larger initial seed '\
+    #     '(i.e., parameter "NUM_S"). If the problem persists, it might be '\
+    #     'likely that the parameterization is not adequate.'
+
+        if (CUM_S < train and NUM_S < 2):
+            print('SUPERRR-PPPUTA')
+            break
+
 
     collect()
     # lrain[0] = lrain[0].where(np_mask == 1, 0)
     # MAYBE THE 1.MASK SHOULD HAPPEN HERE
-    return lrain[0], kum_s
+    return lrain[0], kum_s, NUM_S
 
 
 # %% wrapper
+class Found(Exception): pass
 
-def wrapper(NC_NAMES, year_z):
+def wrapper(NC_NAMES, year_z):  # year_z=SEED_YEAR
 #%%
     global SPACE
 
@@ -1704,7 +1711,7 @@ def wrapper(NC_NAMES, year_z):
 
 #%%
         # FOR EVERY YEAR of the SIMULATION
-        for simy in tqdm(range(NUMSIMYRS), ncols=50):  # simy=0; year_z=2024
+        for simy in tqdm(range(NUMSIMYRS), ncols=50):  # simy=0
 
             iyear = year_z + simy
             mlen, date_pool = wet_days(iyear)
@@ -1745,98 +1752,107 @@ def wrapper(NC_NAMES, year_z):
 
             C_OUT = []  # meaningless array to collect reached cums
 
-            # FOR EVERY N_REGION
-            for nreg, srain in enumerate(tqdm(seas_rain, ncols=50)):
-            # nreg=2; srain=seas_rain[nreg]
-                # print(nreg, srain)
-                for jter, ireg in enumerate(tqdm(icpac_s['npma'], ncols=50)):
-                # jter=1; ireg=icpac_s['npma'][jter]
-                    micro_mask = region_s['npma'][nreg] * ireg
-                    # plt.imshow(micro_mask, cmap='turbo', interpolation='none')
-                # the region must be "large" enough to compute rainfall
-                    if micro_mask.sum() > 999:
+            try:
+                # FOR EVERY N_REGION
+                for nreg, srain in enumerate(tqdm(seas_rain, ncols=50)):
+                # nreg=2; srain=seas_rain[nreg]
+                    # print(nreg, srain)
+                    for jter, ireg in enumerate(tqdm(icpac_s['npma'], ncols=50)):
+                    # jter=1; ireg=icpac_s['npma'][jter]
+                        micro_mask = region_s['npma'][nreg] * ireg
+                        # plt.imshow(micro_mask, cmap='turbo', interpolation='none')
+                    # the region must be "large" enough to compute rainfall
+                        if micro_mask.sum() > 999:
 
-                        # scale (or not) the total seasonal rainfall
-                        # using '(simy + 1)' starts the increase right from the first year
-                        reg_tot = srain[jter] *\
-                            (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
-                            # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
-                        # reg_tot = 1e-1  # for testing!
+                            # scale (or not) the total seasonal rainfall
+                            # using '(simy + 1)' starts the increase right from the first year
+                            reg_tot = srain[jter] *\
+                                (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
+                                # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+                            # reg_tot = 1e-1  # for testing!
 
-                        reg_rain, cum_out = loop(
-                            reg_tot, region_s['mask'].iloc[nreg], micro_mask,
-                            nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
-                            )
+                            reg_rain, cum_out, trials = loop(
+                                reg_tot, region_s['mask'].iloc[nreg], micro_mask,
+                                nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
+                                )
+                            if trials < 2:
+                                raise Found
 
-                        # # where the rain must be placed
-                        # what = np.intersect1d(time_seas, reg_rain['time'],
-                        #                       assume_unique=True, return_indices=True)
-                        # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
-                        #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
-                        # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
+                            # # where the rain must be placed
+                            # what = np.intersect1d(time_seas, reg_rain['time'],
+                            #                       assume_unique=True, return_indices=True)
+                            # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
+                            #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+                            # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
 
-                        reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
-                        sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
-                        # # having assigned the 'rain' name
-                        # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
-                        #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
-                        #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
-                        #     )
+                            reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
+                            sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
+                            # # having assigned the 'rain' name
+                            # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
+                            #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
+                            #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
+                            #     )
 
-                        collect()
-                        # the line below should be removed??
-                        C_OUT.append(cum_out[-1].data)
+                            collect()
+                            # the line below should be removed??
+                            C_OUT.append(cum_out[-1].data)
 
-            # # FOR EVERY N_REGION
-            # for nreg in tqdm(range(NREGIONS), ncols=50):  # nreg=2
-            # # for nreg in tqdm(range(1), ncols=50):  # nreg=0  # for testing!
+                # # FOR EVERY N_REGION
+                # for nreg in tqdm(range(NREGIONS), ncols=50):  # nreg=2
+                # # for nreg in tqdm(range(1), ncols=50):  # nreg=0  # for testing!
 
-            #     # scale (or not) the total seasonal rainfall
-            #     # using '(simy + 1)' starts the increase right from the first year
-            #     reg_tot = region_s['rain'].iloc[nreg] *\
-            #         (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
-            #         # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
-            #     # reg_tot = 10.  # for testing!
+                #     # scale (or not) the total seasonal rainfall
+                #     # using '(simy + 1)' starts the increase right from the first year
+                #     reg_tot = region_s['rain'].iloc[nreg] *\
+                #         (1 + PTOT_SC[eval(n_sim_y)] + (simy * PTOT_SF[eval(n_sim_y)]))
+                #         # (1 + PTOT_SC[simy] + (simy * PTOT_SF[simy]))
+                #     # reg_tot = 10.  # for testing!
 
-            #     reg_rain, cum_out = loop(
-            #         reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
-            #         nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
-            #         )
+                #     reg_rain, cum_out = loop(
+                #         reg_tot, region_s['mask'].iloc[nreg], region_s['npma'][nreg],
+                #         nsim, simy, nreg, mlen, upd_max, maxima, date_pool,
+                #         )
 
-            #     # # where the rain must be placed
-            #     # what = np.intersect1d(time_seas, reg_rain['time'],
-            #     #                       assume_unique=True, return_indices=True)
-            #     # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
-            #     #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
-            #     # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
+                #     # # where the rain must be placed
+                #     # what = np.intersect1d(time_seas, reg_rain['time'],
+                #     #                       assume_unique=True, return_indices=True)
+                #     # sub_grp[RAIN_NAME][what[1], :, :] = reg_rain.data +\
+                #     #     sub_grp[RAIN_NAME][what[1], :, :].astype(RAINFMT)
+                #     # # sub_grp[RAIN_NAME][sub_grp[RAIN_NAME] == 0] = 1
 
-            #     reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
-            #     sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
-            #     # # having assigned the 'rain' name
-            #     # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
-            #     #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
-            #     #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
-            #     #     )
+                #     reg_rain = reg_rain.reindex({'time': time_seas}, fill_value=0)
+                #     sub_grp[RAIN_NAME][:] = reg_rain + sub_grp[RAIN_NAME][:].astype(RAINFMT)
+                #     # # having assigned the 'rain' name
+                #     # reg_rain.to_netcdf('./model_output/zdos.nc', engine='h5netcdf',
+                #     #     encoding={'rain':{'dtype':'u2', 'zlib':True, 'complevel':9}},
+                #     #     # encoding={'rain':{'dtype':'u2', 'compression':'gzip', "compression_opts": 9}},
+                #     #     )
 
-            #     collect()
+                #     collect()
 
-            #     C_OUT.append(cum_out[-1].data)
+                #     C_OUT.append(cum_out[-1].data)
 
-            # MAYBE THE 1.MASK SHOULD HAPPEN HERE
+                # MAYBE THE 1.MASK SHOULD HAPPEN HERE
 
-            """
-            this is the only right place to assign the SCL and ADD attributes\
-            to the 'sub_grp[RAIN_NAME]' variable. ONLY HERE, and only after the\
-            the whole variable has been set and filled up.
-            you'd have serious problems (i.e., errors in the variable.values\
-            when reading them (back) from the nc.file). please DO NOT be stupid!
-            """
-            if RAINFMT[0] != 'f':
-                sub_grp[RAIN_NAME].scale_factor = SCL
-                sub_grp[RAIN_NAME].add_offset = ADD
+                """
+                this is the only right place to assign the SCL and ADD attributes\
+                to the 'sub_grp[RAIN_NAME]' variable. ONLY HERE, and only after the\
+                the whole variable has been set and filled up.
+                you'd have serious problems (i.e., errors in the variable.values\
+                when reading them (back) from the nc.file). please DO NOT be stupid!
+                """
+                if RAINFMT[0] != 'f':
+                    sub_grp[RAIN_NAME].scale_factor = SCL
+                    sub_grp[RAIN_NAME].add_offset = ADD
 
-            nc.close()
-            collect()
+                nc.close()
+                collect()
+            except Found:
+                print('HYPERRR-PPPUTO')
+                nc.close()
+                collect()
+                brk_file = join(dirname(sim_file), f'brokenSim--{basename(sim_file)}')
+                replace(sim_file, brk_file)
 #%%
 
             # store.mean.stats as CSV.file (less memory when using INT)
