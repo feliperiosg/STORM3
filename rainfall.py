@@ -1848,7 +1848,7 @@ def wrapper(NC_NAMES, year_z):  # year_z=SEED_YEAR
                 nc.close()
                 collect()
             except Found:
-                print('HYPERRR-PPPUTO')
+                print('HYPERRR-DANGERR')
                 nc.close()
                 collect()
                 brk_file = join(dirname(sim_file), f'brokenSim--{basename(sim_file)}')
