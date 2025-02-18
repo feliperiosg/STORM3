@@ -60,9 +60,9 @@ tqdm.pandas(ncols=50)  # , desc="progress-bar")
 
 # %% parameters
 
-EVENT_DATA = f'./model_input/0326_collect_{SEASON_TAG}_track_hadIMERG_.nc'
+EVENT_DATA = glob(f'./model_input/*collect_{SEASON_TAG}_track_hadIMERG_*.nc')[0]
 ALTERNATIV = 1  # 1-for.simple.totals; 2-simple.totals+copula; 3-pf-based
-ICPAC_ONLY = 1  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
+ICPAC_ONLY = 0  # 1-for.only.ICPAC.forecast.SHP; 0-for.only.preprocessing
 
 # # OGC-WKT for HAD [taken from https://epsg.io/42106]
 # WKT_OGC = 'PROJCS["WGS84_/_Lambert_Azim_Mozambique",'\
@@ -1705,9 +1705,9 @@ class fit_pdf:
         # betas
         self._f_norm = [
             'anglit', 'burr', 'chi', 'chi2', 'cosine', 'exponweib', 'hypsecant',
-            'jf_skew_t', 'johnsonsb', 'logistic', 'maxwell', 'ncx2',
-            'nct', 'norm', 'powerlognorm', 'powernorm', 't', 'weibull_max',
-            # 'nakagami', 'norminvgauss',
+            'johnsonsb', 'logistic', 'maxwell', 'ncx2', 'nct', 'norm',
+            'powerlognorm', 'powernorm', 't', 'weibull_max',
+            # 'jf_skew_t', 'nakagami', 'norminvgauss',
             ]
         # exponential-like (decrease) distros
         self._f_expn = [
@@ -1995,34 +1995,17 @@ def totals(set_tot, area_km):
 
 # # reading MONTHLY.IMERG (for a given season)
 # # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# sdic = {'MAM': [3, 4, 5], 'OND': [10, 11, 12]}
-
-# def imorg(year):  # year=2000; year=2021
-#     flist = glob(f'../SETS/imerg_m/3B-MO*{year}*')
-#     ix = np.isin(list(map(lambda x: int(x.split('E235959')[1][1:3]), flist)), sdic[SEASON_TAG])
-#     flist = [value for bool_, value in zip(ix, flist) if bool_]
-#     if len(flist)!=0:
-#         imerg_mo = xr.open_mfdataset(
-#             flist, combine='nested', concat_dim='time', decode_times=True,
-#             use_cftime=True, decode_cf=True,  # data_vars=['precipitation'],
-#             mask_and_scale=True , parallel=False).transpose('time', 'lat', 'lon')
-#         daysim = imerg_mo.time.dt.days_in_month
-#         seas_rain = (imerg_mo * daysim * 24).sum(dim='time').compute()
-#         seas_rain['precipitationQualityIndex'] =\
-#             imerg_mo['precipitationQualityIndex'].mean(dim='time').compute()
-#         seas_rain.rio.write_crs(CRS('EPSG:4326'),
-#                                 grid_mapping_name='spatial_ref', inplace=True)
-#         # seas_rain.precipitation.plot(robust=True, cmap='gist_ncar')
-#         # seas_rain.precipitationQualityIndex.plot(robust=True, cmap='turbo')
-#     else:
-#         seas_rain = []
-#     return seas_rain
-
-# ilis = list(map(imorg, np.r_[2000:2022]))
-# # remove.voids.in.a.list (no tracking of voids!)
-# # https://stackoverflow.com/a/40598286/5885810
-# seasonal_monthly_imerg = xr.concat(
-#     list(filter(None, ilis)), 'time', compat='override', coords='minimal')
+# seasonal_monthly_imerg = xr.open_dataset(
+#     f'./model_input/rainfall_{SEASON_TAG}.nc', decode_times=True,
+#     decode_cf=True,  # data_vars=['precipitation'],
+#     mask_and_scale=True,).transpose('time', 'lat', 'lon')
+# seasonal_monthly_imerg.rio.write_crs(
+#     CRS(seasonal_monthly_imerg.spatial_ref.attrs['spatial_ref']),
+#     grid_mapping_name='spatial_ref', inplace=True
+#     )
+# seasonal_monthly_imerg = seasonal_monthly_imerg.mean(dim='time')
+# # seasonal_monthly_imerg.rain.plot(robust=True, cmap='gist_ncar')
+# # seasonal_monthly_imerg.mean_precipitationQualityIndex.plot(robust=True, cmap='turbo')
 
 
 # %% icpacs casting
@@ -2201,7 +2184,8 @@ def compute(space):  # space = masking()
         decode_coords='all',  # "decode_coords" helps to interpret CRS
         )
     seas = seas.mean(dim='time')
-    # seas = seas.drop_vars('spatial_ref').rename({'lat': 'y', 'lon': 'x'})
+    # # seas = seas.drop_vars('spatial_ref').rename({'lat': 'y', 'lon': 'x'})
+    # seas = seas.drop_vars('mean_precipitationQualityIndex')
     seas = seas.rename({'lat': 'y', 'lon': 'x'})
     # seas.rain.plot(cmap='gist_ncar', robust=True)
 
@@ -2248,18 +2232,21 @@ def compute(space):  # space = masking()
         # tots = totals(fset.clip_set, (one_area.region.area_m / 1e6).values)
         tots = totals(fset.clip_set, npix)
         # tots.total.mean()  # tots.total.values
+        # # JF: 69.8485;  MAM: 382.8558; JJAS: 414.04797; OND: 181.234
 
         # # checking against IMERG_monthly
         # # first run "seasonal_monthly_imerg" in [discrete xtras]
         # mo_clip = seasonal_monthly_imerg.rio.clip(one_area.region.geometry,)
-        # # mo_clip.precipitation[0,:].plot(cmap='turbo')
-        # avgs = mo_clip.precipitation.sum(dim=('lat', 'lon')) / mo_clip.precipitation.count(dim=('lat', 'lon'))
+        # # mo_clip.rain.plot(cmap='turbo')
+        # avgs = mo_clip.rain.sum(dim=('lat', 'lon')) / mo_clip.rain.count(dim=('lat', 'lon'))
         # avgs.mean().data  # avgs.data
+        # # JF: 136.397; MAM: 399.67787; JJAS: 619.1562; OND: 277.369
 
         fit_tot = fit_pdf(tots.total, family='lskm',)
         # fit_tot = fit_pdf(tots.total, family='norm',)
         fit_tot.save(file=FILE_PDF, tag='TOTALP_PDF', region=r)
         # fit_tot.plot()
+        # fit_tot.plot(xlim=(-10, 500))
 
 #  6. CLIP (again) TRACK.DATA to A.O.I (with STORMS having at.least 80% of LF)
         dset = clipping(dzet, one_area.region, lf=.8)
@@ -2269,7 +2256,7 @@ def compute(space):  # space = masking()
         dur = (dset.clip_set.track_duration *
                dset.clip_set.attrs['time_resolution_hour']).load()
         # plt.hist(dur, bins=29)
-        # [1.5, 81.] -> MAM; [1.5, 62.5] -> OND;
+        # # MAM:[1.5, 48.5]; MAM:[1.5, 81.]; JJAS:[1.5, 50.]; OND: [1.5, 62.5]
 
         # # DOES NOT WORK ON DISCRETE (because of 0.5 res
         # # ... but it works for 1.0 res -> if you find the right pars/bounds)
@@ -2332,11 +2319,11 @@ def compute(space):  # space = masking()
         fit_rad = fit_pdf(all_vars.df.radii, family='rskm',)
         fit_rad.save(file=FILE_PDF, tag='RADIUS_PDF', region=r)
         # fit_rad.plot()
-        # [18.7, 434.6] -> MAM; [17.8, 435.6] -> OND;
+        # # JF: [23.262, 366.636]; MAM: [18.712, 434.609]; JJAS: [17.841, 467.39]; OND: [17.84, 435.633]
 
         # # if working with areas
         # fit_are = fit_pdf(all_vars.df.area, family='nsym',)
-        # fit_are.plot()
+        # # fit_are.plot()
 
 # 15. FIT VELOCITY (in m/s)
         fit_vel = fit_pdf(all_vars.df.velocity, family='norm',)
@@ -2368,7 +2355,7 @@ def compute(space):  # space = masking()
 # 17. TIME of DAY [CIRCULAR]
         tod = dset.clip_set.start_basetime.load()
         tod = (tod.dt.hour + tod.dt.minute / 60 + tod.dt.second / 3600).data
-        tod_c = circular(tod, data_type='tod', met_cap=.93)
+        tod_c = circular(tod, data_type='tod', met_cap=.91)
         # tod_c._vmtab, tod_c._vmtab.sum(), tod_c._vmini, tod_c._vmini.sum()
         # tod_c.plot_samples(data_type='tod', bins=50)
         # tod_c.plot_bic()
@@ -2376,7 +2363,7 @@ def compute(space):  # space = masking()
 
 # 18. DAY of YEAR [CIRCULAR]
         doy = (dset.clip_set.start_basetime.dt.dayofyear + tod / 24).compute().data
-        doy_c = circular(doy, data_type='doy', met_cap=.83)
+        doy_c = circular(doy, data_type='doy', met_cap=.90)
         # doy_c._vmtab, doy_c._vmtab.sum()
         # doy_c.plot_samples(data_type='doy', bins=20)
         # doy_c.plot_bic()

@@ -49,26 +49,42 @@ flist = [item for items in flist for item in items]
 
 imerg = xr.open_mfdataset(
     flist, combine='nested', concat_dim='time', chunks='auto',
-    mask_and_scale=True, data_vars=['precipitation'],
+    mask_and_scale=True, # data_vars=['precipitation'],
     # decode_times=True, decode_cf=True, drop_variables=['mask]'], parallel=True
     )
+imerg = imerg.convert_calendar('gregorian')
 
-time = imerg.indexes['time'].to_datetimeindex(time_unit='s')
-timo = xr.DataArray(time.days_in_month * 24, dims=['time'], coords=[imerg.time,])
+# time = imerg.indexes['time'].to_datetimeindex(time_unit='s')
+# timo = xr.DataArray(time.days_in_month * 24, dims=['time'], coords=[imerg.time,])
+time = imerg.time
+timo = xr.DataArray(time.dt.days_in_month * 24, dims=['time'], coords=[imerg.time,])
+
+qidx = imerg.precipitationQualityIndex.groupby(group='time.year').mean().compute()
+qidx = qidx.rename({'year': 'time'})
+qidx['time'] = to_datetime([f'{x}0101' for x in qidx['time'].data],
+                           yearfirst=True, origin='unix')
+qidx = qidx.transpose('time', 'lat', 'lon').round(0).astype('i1')
 
 merg = imerg * timo
 merg = merg.groupby(group='time.year').sum().compute()
 merg = merg.rename_dims({'year': 'time'})
-merg = merg.rename_vars({'year': 'time', 'precipitation': 'rain'})
+merg = merg.rename_vars({
+    'year': 'time',
+    'precipitation': 'rain',
+    'precipitationQualityIndex':'mean_precipitationQualityIndex'
+    })
 merg['time'] = to_datetime([f'{x}0101' for x in merg.time.data],
                            yearfirst=True, origin='unix')
 merg = merg.transpose('time', 'lat', 'lon')
+merg['mean_precipitationQualityIndex'] = qidx
 
 merg.rio.write_crs(rasterio.crs.CRS.from_wkt(WGS84_WKT),
                    grid_mapping_name='spatial_ref', inplace=True,)
 merg['rain'].attrs = {'units': 'mm/season'}
+merg['mean_precipitationQualityIndex'].attrs.pop('CodeMissingValue')
 
 # merg.rain.plot(
+# # merg.mean_precipitationQualityIndex.plot(
 #     x='lon', y='lat', col='time', col_wrap=6, cmap='cmaps_tbr_240_300_r',
 #     # robust=False, vmin=10, vmax=1400, levels=27,  # for JF
 #     robust=True,
@@ -84,8 +100,14 @@ assigning the "GRID_MAPPING" attribute proved to be of outmost importance
 merg.to_netcdf(
     f'./model_input/rainfall_{SS}.nc', mode='w', engine='netcdf4',
     encoding={
-        'rain': {'dtype': 'f4', 'zlib': True, 'complevel': 9,
-                 'grid_mapping': 'spatial_ref', },
+        'rain': {
+            'dtype': 'f4', 'zlib': True, 'complevel': 9, 'grid_mapping': 'spatial_ref',
+            # '_FillValue': -99.99,
+            },
+        'mean_precipitationQualityIndex': {
+            'dtype': 'i1', 'zlib': True, 'complevel': 9,
+            'grid_mapping': 'spatial_ref', '_FillValue': -1
+            },
         # 'mask': {'dtype': 'u1','_FillValue': 0, 'grid_mapping': 'spatial_ref'},
         }
     )

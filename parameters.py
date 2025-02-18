@@ -14,7 +14,7 @@ For an 'in-prompt' help (on these parameters) type:
 
 NUMSIMS = 1  # Number of runs per Season (one NC.file per simulation)
 NUMSIMYRS = 1  # Number of years per run (per Season)
-SEED_YEAR = 2024
+SEED_YEAR = 2025
 # SEED_YEAR  = None  # for your SIM/VAL to start in the current year
 
 """
@@ -55,7 +55,7 @@ be passed from the command line. Therefore, their modification/tweaking must
 carried out here.
 """
 
-SEASON_TAG = 'MAM'
+SEASON_TAG = 'JF'
 
 TER_YEAR = 2025
 TER_FILE = f'./model_input/tercilesICPAC_{SEASON_TAG}_{TER_YEAR}.shp'
@@ -77,7 +77,7 @@ OUT_PATH = './model_output'                             # output folder
 # RAIN_MAP = '../3B-HHR.MS.MRG.3IMERG.20101010-S100000-E102959.0600.V06B.HDF5'   # no.CRS at all!
 # RAIN_MAP = f'./realisation_{SEASON_TAG}_crs-wrong.nc'  # no..interpretable CRS
 RAIN_MAP = f'./model_input/rainfall_{SEASON_TAG}.nc'  # yes.interpretable CRS
-NREGIONS = 3  # number of regions to split the whole.region into
+NREGIONS = 4  # number of regions to split the whole.region into
 """
 NREGIONS ==1 means no splitting at all!.
 The model still 'splits' the region into 1 big area equal to the catchment.
